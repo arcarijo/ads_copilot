@@ -27,3 +27,9 @@ prisma/dev.db
 *.bak
 .DS_Store
 Thumbs.db
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# Installed agent skills (tooling, not app code)
+.agents/

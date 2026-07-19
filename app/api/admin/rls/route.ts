@@ -20,7 +20,6 @@ import { safeEqual } from "@/lib/crypto";
  */
 
 const TABLES = [
-  "User",
   "Client",
   "MetaAudience",
   "PlatformConnection",
@@ -59,7 +58,6 @@ async function diagnose() {
 
 async function appCounts() {
   return {
-    users: await prisma.user.count(),
     clients: await prisma.client.count(),
     campaigns: await prisma.campaign.count(),
     connections: await prisma.platformConnection.count(),

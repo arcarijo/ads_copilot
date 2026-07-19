@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode, type CSSProperties } from "react";
+import { useEffect, useRef, type ReactNode, type CSSProperties } from "react";
 import { Icon, type IconName } from "../components/Icon";
 
 /* ---------------------------------------------------------------------------
@@ -53,95 +53,6 @@ function Reveal({
   );
 }
 
-function SignInDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    const d = dialogRef.current;
-    if (!d) return;
-    if (open && !d.open) d.showModal();
-    if (!open && d.open) d.close();
-  }, [open]);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError(false);
-    const res = await fetch("/api/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
-    });
-    if (res.ok) {
-      // Hard navigation: bypasses Next's router cache, which still holds the
-      // pre-login /login redirect for "/" and would otherwise bounce us back.
-      window.location.assign("/");
-      return;
-    }
-    setBusy(false);
-    setError(true);
-  }
-
-  return (
-    <dialog ref={dialogRef} onClose={onClose} aria-label="Sign in" className="pop-in">
-      <div
-        className="w-[min(92vw,25rem)] rounded-[var(--radius-lg)] p-7"
-        style={{ background: "var(--surface-1)", border: "1px solid var(--line-standard)", boxShadow: "0 30px 80px -24px rgba(0,0,0,0.7)" }}
-      >
-        <div className="mb-5 flex items-start justify-between gap-4">
-          <div className="flex items-center gap-2.5">
-            <span className="grid h-9 w-9 place-items-center rounded-full" style={{ background: "var(--accent-wash)", color: "var(--accent)" }}>
-              <Icon name="compass" size="1.25rem" />
-            </span>
-            <div>
-              <h2 className="font-display text-lg font-semibold" style={{ color: "var(--ink-primary)" }}>Welcome back</h2>
-              <p className="text-xs" style={{ color: "var(--ink-tertiary)" }}>Enter your passcode to reach your campaigns.</p>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="grid h-8 w-8 place-items-center rounded-full transition-colors hover:bg-[var(--surface-3)]"
-            style={{ color: "var(--ink-tertiary)" }}
-          >
-            <Icon name="x" size="1rem" />
-          </button>
-        </div>
-        <form onSubmit={submit} className="space-y-4">
-          <input
-            type="password"
-            autoFocus
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Your passcode"
-            aria-label="Passcode"
-            className="w-full rounded-[var(--radius-sm)] px-3 py-2.5 text-sm outline-none"
-            style={{ background: "var(--surface-inset)", border: "1px solid var(--line-standard)", color: "var(--ink-primary)" }}
-          />
-          {error && (
-            <p className="flex items-center gap-1.5 text-sm" style={{ color: "var(--danger)" }}>
-              <Icon name="alert" size="0.9rem" /> That passcode didn&apos;t match — try again.
-            </p>
-          )}
-          <button
-            disabled={busy || !password}
-            className="flex w-full items-center justify-center gap-1.5 rounded-[var(--radius-sm)] py-2.5 font-semibold text-[#1a0f08] transition-transform active:scale-[0.97] disabled:opacity-50"
-            style={{ background: "var(--accent)" }}
-          >
-            {busy ? <><Icon name="refresh" size="0.9em" className="spin" /> Checking…</> : <>Enter <Icon name="arrow-right" size="0.9em" className="icon-nudge" /></>}
-          </button>
-          <p className="text-center text-[11px]" style={{ color: "var(--ink-muted)" }}>
-            No passcode yet? Your account manager sets one up for you.
-          </p>
-        </form>
-      </div>
-    </dialog>
-  );
-}
-
 function Feature({ icon, title, children, className = "", style }: { icon: IconName; title: string; children: ReactNode; className?: string; style?: CSSProperties }) {
   return (
     <div className={`lift group flex flex-col rounded-[var(--radius-lg)] p-6 ${className}`} style={{ background: "var(--surface-1)", border: "1px solid var(--line-subtle)", ...style }}>
@@ -155,17 +66,12 @@ function Feature({ icon, title, children, className = "", style }: { icon: IconN
 }
 
 export default function Landing() {
-  const [signIn, setSignIn] = useState(false);
-
   useEffect(() => {
     document.documentElement.setAttribute("data-js", "");
   }, []);
 
-  const open = () => setSignIn(true);
-
   return (
     <div style={{ background: "var(--surface-0)" }}>
-      <SignInDialog open={signIn} onClose={() => setSignIn(false)} />
 
       {/* ---- Nav ---- */}
       <header className="sticky top-0 z-30" style={{ background: "rgba(20,17,14,0.82)", backdropFilter: "blur(10px)", borderBottom: "1px solid var(--line-subtle)" }}>
@@ -181,13 +87,13 @@ export default function Landing() {
             <a href="#capabilities" className="rounded-[var(--radius-sm)] px-3 py-1.5 transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--ink-primary)]">Capabilities</a>
             <a href="#security" className="rounded-[var(--radius-sm)] px-3 py-1.5 transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--ink-primary)]">Security</a>
           </nav>
-          <button
-            onClick={open}
+          <a
+            href="/sign-in"
             className="flex items-center gap-1.5 rounded-[var(--radius-sm)] px-4 py-2 text-sm font-semibold text-[#1a0f08] shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.97]"
             style={{ background: "var(--accent)" }}
           >
             Sign in <Icon name="arrow-right" size="0.85rem" className="icon-nudge" />
-          </button>
+          </a>
         </div>
       </header>
 
@@ -208,13 +114,13 @@ export default function Landing() {
               Copilot runs your Meta ad campaigns end to end — structural setup, daily optimization, honest reporting — while every decision that spends money or changes direction waits for you.
             </p>
             <div className="rise-in mt-8 flex flex-wrap items-center gap-3" style={{ ["--i" as string]: 3 }}>
-              <button
-                onClick={open}
+              <a
+                href="/sign-in"
                 className="flex items-center gap-2 rounded-[var(--radius-md)] px-6 py-3 font-semibold text-[#1a0f08] shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.97]"
                 style={{ background: "var(--accent)" }}
               >
                 Sign in <Icon name="arrow-right" size="0.95em" className="icon-nudge" />
-              </button>
+              </a>
               <a
                 href="#how"
                 className="flex items-center gap-2 rounded-[var(--radius-md)] px-6 py-3 font-semibold transition-colors hover:bg-[var(--surface-2)]"
@@ -455,7 +361,7 @@ export default function Landing() {
           <div className="mt-10 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {[
               { icon: "shield" as IconName, t: "Encrypted at rest", d: "Meta tokens and platform credentials are AES-256-GCM encrypted in the database. They never leave the server or appear in any API response." },
-              { icon: "user" as IconName, t: "Hardened sign-in", d: "Expiring, HMAC-signed sessions on a dedicated signing key; rate-limited, constant-time login; passcodes stored with a peppered hash." },
+              { icon: "user" as IconName, t: "Managed authentication", d: "Sign-in is handled by Clerk — passwordless email links or Google, with optional two-factor. Session lifetime, token expiry, and resets are owned by a dedicated identity provider, not home-grown code." },
               { icon: "grip" as IconName, t: "Row-Level Security", d: "Every database table enforces isolation at the Postgres layer — closing off any path around the application’s own tenant checks." },
               { icon: "globe" as IconName, t: "Locked-down edge", d: "HSTS, clickjacking denial, and content-type protection on every response. The research crawler is SSRF-guarded against internal targets." },
               { icon: "gauge" as IconName, t: "Abuse throttling", d: "Per-user rate limits on the expensive AI endpoints stop runaway cost, keyed so one account can never degrade another." },
@@ -520,15 +426,15 @@ export default function Landing() {
                 Ready when you are.
               </h2>
               <p className="relative mx-auto mt-4 max-w-xl text-lg leading-relaxed" style={{ color: "rgba(255,255,255,0.9)" }}>
-                Sign in to reach your campaigns, or ask your account manager for a passcode to get started.
+                Sign in to reach your campaigns, or ask your account manager to set up your access.
               </p>
-              <button
-                onClick={open}
+              <a
+                href="/sign-in"
                 className="relative mt-8 inline-flex items-center gap-2 rounded-[var(--radius-md)] px-7 py-3.5 font-semibold shadow-lg transition-transform hover:-translate-y-0.5 active:scale-[0.97]"
                 style={{ background: "#1a0f08", color: "var(--accent)" }}
               >
                 Sign in <Icon name="arrow-right" size="0.95em" className="icon-nudge" />
-              </button>
+              </a>
             </div>
           </Reveal>
         </div>
@@ -546,9 +452,9 @@ export default function Landing() {
           <p className="text-xs" style={{ color: "var(--ink-muted)" }}>
             Your promotion co-pilot — AI runs the day-to-day, you steer with what you know.
           </p>
-          <button onClick={open} className="text-sm font-medium transition-colors hover:text-[var(--accent)]" style={{ color: "var(--ink-secondary)" }}>
+          <a href="/sign-in" className="text-sm font-medium transition-colors hover:text-[var(--accent)]" style={{ color: "var(--ink-secondary)" }}>
             Sign in
-          </button>
+          </a>
         </div>
       </footer>
     </div>

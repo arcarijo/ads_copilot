@@ -1,16 +1,17 @@
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { prisma } from "./db";
-import { Session, sessionSecret, verifySession } from "./session";
+import { currentClerkPrincipal } from "./clerk";
 
-export type { Session };
+// Identity is owned by Clerk; authorization/tenancy stays here. A "user" is a
+// Clerk user id; "admin" is a Clerk user whose role claim is "admin". Every
+// scope/access check below is keyed on the Clerk user id via Client.clerkUserId.
+export type Session = { role: "admin" } | { role: "user"; userId: string };
 
-/** Resolve the current session from the request cookie. Null = not logged in. */
+/** Resolve the current session from Clerk. Null = not signed in. */
 export async function getSession(): Promise<Session | null> {
-  const secret = sessionSecret();
-  if (!secret) return null;
-  const jar = await cookies();
-  return verifySession(jar.get("adm")?.value, secret);
+  const principal = await currentClerkPrincipal();
+  if (!principal) return null;
+  return principal.role === "admin" ? { role: "admin" } : { role: "user", userId: principal.userId };
 }
 
 export function isAdmin(session: Session | null): boolean {
@@ -18,20 +19,20 @@ export function isAdmin(session: Session | null): boolean {
 }
 
 /** Prisma where-fragment limiting Client queries to what this session may see. */
-export function clientScope(session: Session): { userId?: string } {
-  return session.role === "admin" ? {} : { userId: session.userId };
+export function clientScope(session: Session): { clerkUserId?: string } {
+  return session.role === "admin" ? {} : { clerkUserId: session.userId };
 }
 
 /** Prisma where-fragment for Campaign queries (via the client relation). */
 export function campaignScope(session: Session): object {
-  return session.role === "admin" ? {} : { client: { userId: session.userId } };
+  return session.role === "admin" ? {} : { client: { clerkUserId: session.userId } };
 }
 
 /** True when this session may touch the given client. */
 export async function canAccessClient(session: Session, clientId: string): Promise<boolean> {
   if (session.role === "admin") return true;
-  const client = await prisma.client.findUnique({ where: { id: clientId }, select: { userId: true } });
-  return client?.userId === session.userId;
+  const client = await prisma.client.findUnique({ where: { id: clientId }, select: { clerkUserId: true } });
+  return client?.clerkUserId === session.userId;
 }
 
 /** True when this session may touch the given campaign. Legacy campaigns with no client are admin-only. */
@@ -39,15 +40,15 @@ export async function canAccessCampaign(session: Session, campaignId: string): P
   if (session.role === "admin") return true;
   const campaign = await prisma.campaign.findUnique({
     where: { id: campaignId },
-    select: { client: { select: { userId: true } } },
+    select: { client: { select: { clerkUserId: true } } },
   });
-  return campaign?.client?.userId === session.userId;
+  return campaign?.client?.clerkUserId === session.userId;
 }
 
 /**
  * Route-handler guard. Returns { session } on success or { response } to
  * return immediately. Usage:
- *   const auth = await requireSession();            // any logged-in role
+ *   const auth = await requireSession();            // any signed-in role
  *   const auth = await requireSession("admin");     // admin only
  */
 export async function requireSession(

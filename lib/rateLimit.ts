@@ -3,7 +3,7 @@
 // practice), zero dependencies, no PII persisted. For hard guarantees at
 // scale, swap for a durable store — for a passcode login form this raises the
 // cost of online guessing by orders of magnitude.
-import type { Session } from "./session";
+import type { Session } from "./auth";
 
 const buckets = new Map<string, number[]>();
 
