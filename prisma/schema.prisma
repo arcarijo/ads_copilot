@@ -10,27 +10,15 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// A client-facing login. One user (studio/venue owner) may own several
-// Clients (businesses / ad accounts). The master admin is NOT a User row —
-// admin auth stays on the ADMIN_PASSWORD env var; admin manages these
-// passcodes and client assignments from /users.
-model User {
-  id           String   @id @default(cuid())
-  name         String
-  email        String?
-  passcodeHash String   @unique // sha256 hex of the login passcode
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  clients      Client[]
-}
-
+// Identity is owned by Clerk (magic-link/Google/MFA). There is no local user
+// table: a Client's owning login is stored as a Clerk user id on Client.
+// Admin is a Clerk user with publicMetadata.role = "admin".
 model Client {
   id                 String  @id @default(cuid())
   name               String
   contactEmail       String?
-  // Owning login. Null = visible to admin only (unassigned).
-  userId             String?
-  user               User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  // Clerk user id of the owning login. Null = visible to admin only (unassigned).
+  clerkUserId        String?
   // How often the daily-cycle report email goes out: DAILY | WEEKLY | OFF.
   // Optimization itself always runs daily; only the email cadence changes.
   reportFrequency    String  @default("DAILY")
@@ -56,6 +44,8 @@ model Client {
   researchRuns ResearchRun[]
   platforms    PlatformConnection[]
   audiences    MetaAudience[]
+
+  @@index([clerkUserId])
 }
 
 // Persistent audience assets for a client's Meta ad account, built from the
