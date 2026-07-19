@@ -1,0 +1,232 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // Production: Supabase Postgres via the Session Pooler (IPv4-compatible,
+  // required for Vercel). Local dev previously used sqlite — switched over
+  // for the multi-tenant Vercel deploy.
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// A client-facing login. One user (studio/venue owner) may own several
+// Clients (businesses / ad accounts). The master admin is NOT a User row —
+// admin auth stays on the ADMIN_PASSWORD env var; admin manages these
+// passcodes and client assignments from /users.
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String?
+  passcodeHash String   @unique // sha256 hex of the login passcode
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  clients      Client[]
+}
+
+model Client {
+  id                 String  @id @default(cuid())
+  name               String
+  contactEmail       String?
+  // Owning login. Null = visible to admin only (unassigned).
+  userId             String?
+  user               User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  // How often the daily-cycle report email goes out: DAILY | WEEKLY | OFF.
+  // Optimization itself always runs daily; only the email cadence changes.
+  reportFrequency    String  @default("DAILY")
+  website            String?
+  socialLinksJson    String  @default("[]")
+  gmbUrl             String?
+  // Meta credentials (per-tenant). NOTE: stored plaintext — move to a KMS or
+  // column encryption before scaling beyond trusted internal use.
+  metaAdAccountId    String // numeric id, "act_" prefix applied by the bridge
+  metaPageId         String
+  metaSystemUserId   String?
+  metaSystemUserName String?
+  metaAppId          String?
+  metaAccessToken    String // system-user token used for all ad operations
+  metaAppToken       String?
+  status             String  @default("PENDING") // PENDING | VERIFIED | ERROR
+  verifyResultJson   String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  profile      BusinessProfile?
+  campaigns    Campaign[]
+  researchRuns ResearchRun[]
+  platforms    PlatformConnection[]
+  audiences    MetaAudience[]
+}
+
+// Persistent audience assets for a client's Meta ad account, built from the
+// owner's real-world knowledge via the Audience Studio forms.
+// kinds: CUSTOMER_LIST | ENGAGEMENT | WEBSITE (real Custom Audiences on Meta),
+// LOOKALIKE (Meta lookalike from an origin audience), BLUEPRINT (a reusable
+// targeting spec stored ONLY here — Meta's Saved Audiences API is fragile, so
+// blueprints are our persistent equivalent, consumed by the campaign Copilot).
+model MetaAudience {
+  id             String   @id @default(cuid())
+  clientId       String
+  client         Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  kind           String
+  name           String
+  description    String   @default("")
+  metaAudienceId String? // null for BLUEPRINT (nothing created on Meta)
+  // BLUEPRINT: the MetaTargeting spec. Others: creation params for audit.
+  specJson       String   @default("{}")
+  // Owner-knowledge provenance: which prompts/answers produced this audience.
+  sourceNote     String   @default("")
+  status         String   @default("READY") // READY | ERROR
+  lastError      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+// One row per ad platform a client has toggled on. META gets a row too (for
+// its enabled state and platform-specific directive) even though its
+// credentials live on the Client columns for back-compat. Other platforms
+// keep their per-client credentials in credsJson, shaped by the field specs
+// in lib/platforms.ts. App-level keys (client IDs/secrets, developer tokens)
+// live in env vars, never here.
+model PlatformConnection {
+  id          String   @id @default(cuid())
+  clientId    String
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  platform    String // META | GOOGLE | TIKTOK | PINTEREST | LINKEDIN
+  enabled     Boolean  @default(true)
+  status      String   @default("PENDING") // PENDING | CONNECTED | ERROR
+  // Per-client credentials/identifiers (LinkedIn URNs are long strings — Text).
+  credsJson   String   @default("{}")
+  // Platform-specific manager directive, e.g. "wedding packages on Pinterest
+  // should push all-inclusive winter dates" — read alongside the global one.
+  directive   String   @default("")
+  directiveAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([clientId, platform])
+}
+
+model BusinessProfile {
+  id          String   @id @default(cuid())
+  clientId    String   @unique
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  // Ground-truth strategy document used by the Copilot and Optimizer.
+  // profileMd is the rendered text view; sectionsJson is the structured source
+  // of truth ({ sectionKey: content }) used for gaps, UI, and wizard pre-fill.
+  profileMd   String
+  sectionsJson String  @default("{}")
+  // Manager's live directive to the daily optimizer: "the business shifted,
+  // prioritize X right now." Read FIRST by the Cloudflare worker each cycle so
+  // a human can steer the campaign as real-world conditions change.
+  directive   String   @default("")
+  directiveAt DateTime?
+  // Known markets/audiences, e.g. ["intimate weddings", "podcast recording"].
+  marketsJson String   @default("[]")
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ResearchRun {
+  id           String   @id @default(cuid())
+  clientId     String
+  client       Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  type         String // INITIAL | MARKET_EXTENSION
+  trigger      String
+  status       String   @default("RUNNING") // RUNNING | DONE | FAILED | SKIPPED
+  pagesFetched Int      @default(0)
+  summary      String?
+  createdAt    DateTime @default(now())
+}
+
+model Campaign {
+  id                 String   @id @default(cuid())
+  clientId           String?
+  client             Client?  @relation(fields: [clientId], references: [id])
+  // Which ad platform this campaign runs on. Only META executes today; the
+  // field future-proofs campaign records for the multi-platform roadmap.
+  platform           String   @default("META")
+  name               String
+  objective          String   @default("OUTCOME_LEADS")
+  // DRAFT -> NEEDS_CLARIFICATION -> READY -> LAUNCHING -> ACTIVE -> PAUSED | STOPPED | ERROR
+  status             String   @default("DRAFT")
+  budgetCents        Int
+  budgetType         String   @default("DAILY") // DAILY | LIFETIME
+  // DB-enforced ceiling written at approval time. The Meta bridge refuses any
+  // payload whose budget exceeds this value. The AI can never raise it.
+  budgetCeilingCents Int      @default(0)
+  durationDays       Int      @default(7)
+  startTime          DateTime?
+  endTime            DateTime?
+  questionnaireJson  String   @default("{}")
+  audienceJson       String   @default("{}")
+  creativesJson      String   @default("[]")
+  abTest             Boolean  @default(false)
+  abVariable         String? // CREATIVE | AUDIENCE
+  aiPlanJson         String?
+  clarificationsJson String?
+  metaCampaignId     String?
+  metaAdSetIdsJson   String   @default("[]")
+  metaAdIdsJson      String   @default("[]")
+  lastError          String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  snapshots AnalyticsSnapshot[]
+  logs      Log[]
+  alerts    Alert[]
+}
+
+model AnalyticsSnapshot {
+  id          String   @id @default(cuid())
+  campaignId  String
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  date        String // YYYY-MM-DD (the day the metrics describe)
+  spendCents  Int      @default(0)
+  impressions Int      @default(0)
+  clicks      Int      @default(0)
+  conversions Int      @default(0)
+  ctr         Float    @default(0)
+  cpm         Float    @default(0)
+  cpaCents    Int?
+  frequency   Float    @default(0)
+  rawJson     String   @default("{}")
+  createdAt   DateTime @default(now())
+
+  @@unique([campaignId, date])
+}
+
+model Log {
+  id         String    @id @default(cuid())
+  campaignId String?
+  campaign   Campaign? @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  level      String    @default("INFO") // INFO | WARN | ERROR
+  source     String // COPILOT | META | CRON | OPTIMIZER | RESEARCH | UI
+  message    String
+  detailJson String?
+  createdAt  DateTime  @default(now())
+}
+
+// Self-tracked AI call ledger. Cloudflare Workers AI doesn't expose a simple
+// "neurons remaining today" API, so this counts our own request volume as an
+// honest proxy for free-tier pressure — see lib/capacity.ts.
+model UsageEvent {
+  id        String   @id @default(cuid())
+  kind      String // RESEARCH | COPILOT | OPTIMIZER
+  model     String // the Cloudflare model id used for this call
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model Alert {
+  id           String    @id @default(cuid())
+  campaignId   String?
+  campaign     Campaign? @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  // BILLING_ERROR | ACCOUNT_RESTRICTED | BUDGET_RECOMMENDATION | TOKEN_INVALID | GENERAL
+  type         String
+  message      String
+  acknowledged Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+}

@@ -1,0 +1,247 @@
+@import "tailwindcss";
+
+/*
+  Design world: a cheery, personable co-pilot for studio & venue owners on a
+  warm dark cockpit — charcoal-espresso surfaces, coral/tangerine as the AI's
+  voice and every primary action, plum for the human manager's voice, deep
+  coral→plum gradient for the one hero moment per screen. Dark by default
+  (owners found the light theme too bright); the playfulness lives in the
+  coral energy, rounded type, and plain-English coaching — never at the cost
+  of number legibility. Color strategy: Committed (coral owns the nav + hero;
+  data lives on neutral dark surfaces). Depth = borders + tonal steps.
+  See PRODUCT.md and .interface-design/system.md.
+*/
+
+@theme inline {
+  --font-display: var(--font-sora), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
+}
+
+:root {
+  /* Surfaces — warm ink, not blue-black. Each elevation step is a few points
+     of lightness: whisper-quiet in isolation, unmistakable when stacked. */
+  --surface-0: #14110e; /* page canvas */
+  --surface-1: #1b1713; /* cards, sections */
+  --surface-2: #221d18; /* nested cards, platform rows */
+  --surface-3: #2b241d; /* hover states, tracks, quiet chips */
+  --surface-inset: #100d0b; /* inputs — darker than their card */
+
+  /* Text — warm off-white, four levels */
+  --ink-primary: #f4ece0;
+  --ink-secondary: rgba(244, 236, 224, 0.74);
+  --ink-tertiary: rgba(244, 236, 224, 0.54);
+  --ink-muted: rgba(244, 236, 224, 0.36);
+
+  /* Borders — warm white at low opacity; found when needed, invisible otherwise */
+  --line-subtle: rgba(244, 236, 224, 0.08);
+  --line-standard: rgba(244, 236, 224, 0.14);
+  --line-strong: rgba(244, 236, 224, 0.24);
+
+  /* The one true accent: coral — the AI co-pilot's voice and every primary
+     action. Pair with dark ink text (#1a0f08); NOT safe under white text. */
+  --accent: #ff7a52;
+  --accent-strong: #ff5f30;
+  --accent-deep: #c2410c; /* gradient anchor — ≥5:1 under white text */
+  --accent-wash: rgba(255, 122, 82, 0.13);
+  --accent-ring: rgba(255, 122, 82, 0.38);
+
+  /* The human manager's voice — plum, distinct from the AI's coral. Light
+     enough to read as text on dark surfaces; pair solid fills with dark ink. */
+  --human: #a78bfa;
+  --human-deep: #6d28d9;
+  --human-wash: rgba(167, 139, 250, 0.12);
+
+  /* Signature hero surface: coral → plum, the two voices meeting. One per
+     screen, never behind dense data. Every stop ≥5:1 under white text. */
+  --hero-gradient: linear-gradient(135deg, var(--accent-deep) 0%, #9a2ea8 50%, var(--human-deep) 100%);
+
+  /* Semantic status — bright enough to read as text on dark surfaces */
+  --success: #4ade80;
+  --success-wash: rgba(74, 222, 128, 0.13);
+  --warning: #fbbf24;
+  --warning-wash: rgba(251, 191, 36, 0.13);
+  --danger: #fb7185;
+  --danger-wash: rgba(251, 113, 133, 0.13);
+  --info: #7dd3fc;
+  --info-wash: rgba(125, 211, 252, 0.13);
+  --creative: #f472b6;
+  --creative-wash: rgba(244, 114, 182, 0.13);
+
+  /* Radius scale — concentric, small to large */
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+
+  /* Motion — natural deceleration curves (no bounce/elastic on product UI).
+     Timings follow the 100/300/500 rule: feedback fast, layout medium. */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-tap: 120ms;
+  --dur-state: 220ms;
+  --dur-layout: 360ms;
+
+  /* Spacing base unit: 4px, used in multiples throughout */
+}
+
+html {
+  color-scheme: dark;
+  /* Slightly larger base so every rem-based paragraph reads easier; the tiny
+     px meta-labels stay put. Readability-first. */
+  font-size: 17px;
+}
+
+body {
+  background: var(--surface-0);
+  color: var(--ink-primary);
+  font-family: var(--font-sans);
+  font-size: 0.95rem;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Every header gets the display face, balanced wrapping, tighter tracking. */
+h1, h2, h3, h4, h5, .font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+}
+p { text-wrap: pretty; }
+
+/* The one hero-scale moment per screen — huge, decisive, tabular. */
+.text-hero {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 0.95;
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular-nums, [data-tabular] {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------------------
+   Juiciness layer — feedback on every interaction. Transform/opacity/shadow
+   only (compositor-safe). All of it collapses under prefers-reduced-motion.
+--------------------------------------------------------------------------- */
+
+/* Global button + link-as-button feedback: a quick, satisfying press. Every
+   <button> and role=button gets this without per-element wiring. */
+button:not(:disabled), [role="button"]:not([aria-disabled="true"]) {
+  cursor: pointer;
+  transition: transform var(--dur-tap) var(--ease-out-quart),
+              filter var(--dur-tap) var(--ease-out-quart),
+              box-shadow var(--dur-state) var(--ease-out-quart),
+              background-color var(--dur-state) var(--ease-out-quart),
+              border-color var(--dur-state) var(--ease-out-quart),
+              opacity var(--dur-state) var(--ease-out-quart);
+}
+button:not(:disabled):active, [role="button"]:not([aria-disabled="true"]):active {
+  transform: scale(0.96);
+}
+
+/* Form controls: focus glow + gentle lift. Placeholder stays legible. */
+input, textarea, select {
+  transition: border-color var(--dur-state) var(--ease-out-quart),
+              box-shadow var(--dur-state) var(--ease-out-quart),
+              background-color var(--dur-state) var(--ease-out-quart);
+}
+input:focus, textarea:focus, select:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-ring);
+  outline: none;
+}
+::placeholder { color: var(--ink-muted); opacity: 1; }
+
+/* Interactive lift: cards/tiles that respond to the cursor. */
+.lift {
+  transition: transform var(--dur-state) var(--ease-out-quart),
+              box-shadow var(--dur-state) var(--ease-out-quart),
+              border-color var(--dur-state) var(--ease-out-quart);
+  will-change: transform;
+}
+.lift:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 14px 30px -12px rgba(0, 0, 0, 0.55);
+}
+
+/* Entrance choreography — rise + fade, staggered via --i (cap ~8 items). */
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.rise-in {
+  opacity: 0;
+  animation: rise-in var(--dur-layout) var(--ease-out-quint) forwards;
+  animation-delay: calc(var(--i, 0) * 55ms);
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.94); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.pop-in { animation: pop-in var(--dur-state) var(--ease-out-quint) both; }
+
+/* Shimmer sweep for loading/skeleton and "working" states. */
+@keyframes shimmer { to { background-position: 200% 0; } }
+.shimmer {
+  background: linear-gradient(100deg, transparent 20%, rgba(255,122,82,0.14) 50%, transparent 80%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s var(--ease-out-quart) infinite;
+}
+
+/* Soft attention pulse (used on fresh alerts / focus rings). */
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 var(--accent-ring); }
+  70% { box-shadow: 0 0 0 8px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.pulse-ring { animation: pulse-ring 1.8s var(--ease-out-quart) 2; }
+
+/* Icon that nudges on hover of its parent button. */
+.icon-nudge { transition: transform var(--dur-state) var(--ease-out-quint); }
+button:hover .icon-nudge, a:hover .icon-nudge { transform: translateX(2px); }
+.icon-spin-hover { transition: transform var(--dur-layout) var(--ease-out-quint); }
+button:hover .icon-spin-hover { transform: rotate(90deg); }
+
+/* Spinner for in-flight actions. */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 0.7s linear infinite; }
+
+/* Scroll reveal — default fully visible; only the data-js runtime (set on
+   mount) arms the hidden start state, so SSR / no-JS / headless renders show
+   everything. IntersectionObserver adds .is-in to play the entrance. */
+.reveal { opacity: 1; }
+[data-js] .reveal {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity var(--dur-layout) var(--ease-out-quint),
+              transform var(--dur-layout) var(--ease-out-quint);
+}
+[data-js] .reveal.is-in { opacity: 1; transform: none; }
+
+/* Native dialog (sign-in modal): transparent frame, dimmed blurred backdrop. */
+dialog { border: none; padding: 0; background: transparent; color: inherit; }
+dialog::backdrop { background: rgba(10, 8, 6, 0.72); backdrop-filter: blur(4px); }
+
+/* Slow drift for the hero's gradient aura — atmospheric, compositor-safe. */
+@keyframes aura-drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: 0.9; }
+  50% { transform: translate3d(2%, -3%, 0) scale(1.08); opacity: 1; }
+}
+.aura-drift { animation: aura-drift 14s var(--ease-out-quart) infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rise-in, .pop-in { opacity: 1; animation: none; }
+  .shimmer, .pulse-ring, .spin, .aura-drift { animation: none; }
+  .lift:hover { transform: none; }
+  [data-js] .reveal { opacity: 1; transform: none; transition: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

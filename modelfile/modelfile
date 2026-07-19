@@ -1,0 +1,22 @@
+# Base the custom model on your existing local Gemma 4 12B install
+FROM gemma4:12b
+
+# --- RESOURCE & CONTEXT ADJUSTMENTS ---
+# Sets context window to 16k (forces Ollama to allocate system RAM/VRAM safely)
+PARAMETER num_ctx 16384
+# Reserve thread count for CPU offloading processing
+PARAMETER num_thread 8
+
+# --- SAMPLING CONTROLS (Tuned for strict JSON schema extraction) ---
+# Slightly cooler than default to prevent creative formatting/hallucinations
+PARAMETER temperature 0.3
+PARAMETER top_p 0.95
+PARAMETER top_k 64
+
+# --- AGENTIC SYSTEM OVERRIDES ---
+SYSTEM """You are a senior software engineer acting as an autonomous terminal agent.
+- Your PRIMARY objective is to execute tasks sequentially.
+- NEVER search the web or external URLs for configuration variables that are expected to exist in local files (like CLAUDE.md). Always read local workspace files first.
+- If a tool call fails, analyze the standard error output, adjust your parameter values, and attempt a logical correction. Do not repeat the exact failed call.
+- Keep output formats structured, concise, and clean.
+"""

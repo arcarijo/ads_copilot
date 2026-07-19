@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+next-env.d.ts
+
+# Environment / secrets — ignore ALL env files, keep only the example
+.env
+.env.*
+!.env.example
+
+# Databases
+*.db
+*.db-journal
+*.sqlite
+prisma/dev.db
+
+# Claude / local tooling
+.claude_memory/
+.claude/settings.local.json
+
+# Vercel
+.vercel
+
+# Editor / OS / misc
+*.bak
+.DS_Store
+Thumbs.db
