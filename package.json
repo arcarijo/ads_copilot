@@ -1,5 +1,5 @@
 {
-  "name": "meta-ad-manager",
+  "name": "ads_copilot",
   "private": true,
   "scripts": {
     "dev": "next dev",
