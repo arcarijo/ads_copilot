@@ -78,7 +78,7 @@ function parseSections(profile: { sectionsJson: string; profileMd: string } | nu
   return sectionsFromLegacyMd(profile.profileMd);
 }
 
-export async function getCoachTips(scope: { userId?: string } = {}, limit = 6): Promise<CoachTip[]> {
+export async function getCoachTips(scope: { clerkUserId?: string } = {}, limit = 6): Promise<CoachTip[]> {
   const clients = await prisma.client.findMany({
     where: scope,
     include: {
