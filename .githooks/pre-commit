@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Pre-commit secret guard for ads_copilot.
+# Blocks committing env files (except .env.example) and obvious secret values.
+# Enabled via: git config core.hooksPath .githooks
+set -euo pipefail
+
+fail() { echo "" >&2; echo "🛑 pre-commit BLOCKED: $1" >&2; echo "   (bypass only if you are certain: git commit --no-verify)" >&2; echo "" >&2; exit 1; }
+
+# Files staged for this commit (added/copied/modified/renamed)
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$staged" ] && exit 0
+
+# 1) Never commit real env / secret files (allow only .env.example)
+while IFS= read -r f; do
+  case "$f" in
+    .env.example) ;;
+    .env|.env.*|*/.env|*/.env.*) fail "attempt to commit env file '$f' — real secrets belong only in gitignored .env.local" ;;
+    *.pem|*.key|*.p12|*.pfx|*id_rsa*|*.keystore) fail "attempt to commit key/cert file '$f'" ;;
+    *settings.local.json) fail "attempt to commit local settings '$f'" ;;
+  esac
+done <<< "$staged"
+
+# 2) Scan staged CONTENT for high-signal secret patterns (ignore <PLACEHOLDER> tokens)
+pattern='(-----BEGIN (RSA|EC|OPENSSH|PGP|PRIVATE)|AKIA[0-9A-Z]{16}|xox[baprs]-[0-9A-Za-z-]{10,}|re_[0-9A-Za-z]{20,}|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{36}|EAA[A-Za-z0-9]{30,}|postgres(ql)?://[^/@[:space:]]+:[^/@[:space:]<]{6,}@)'
+hits=$(git diff --cached -U0 --diff-filter=ACMR -- . ':(exclude)vitest.config.ts' ':(exclude)package-lock.json' ':(exclude).claude/skills/**' \
+  | grep -E '^\+' | grep -Ei "$pattern" || true)
+if [ -n "$hits" ]; then
+  echo "$hits" | head -10 >&2
+  fail "staged changes appear to contain a real secret value (see lines above)"
+fi
+
+exit 0
