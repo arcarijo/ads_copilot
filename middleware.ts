@@ -11,6 +11,7 @@ import { NextResponse } from "next/server";
 const isPublic = createRouteMatcher([
   "/login", // public marketing landing (the storefront)
   "/sign-in(.*)",
+  "/__clerk(.*)", // Clerk Frontend API proxy — must not be gated/redirected
   "/api/cron",
   "/api/admin/encrypt",
   "/api/admin/rls",
@@ -44,5 +45,6 @@ export const config = {
     // Skip Next.js internals and static files, run on everything else.
     "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
     "/(api|trpc)(.*)",
+    "/__clerk/:path*",
   ],
 };
