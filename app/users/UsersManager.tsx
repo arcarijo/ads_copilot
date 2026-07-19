@@ -3,76 +3,48 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
-const inputCls =
-  "w-full rounded-[var(--radius-sm)] px-3 py-2 text-sm outline-none transition-colors focus:ring-1";
-const inputStyle = { background: "var(--surface-inset)", border: "1px solid var(--line-standard)", color: "var(--ink-primary)" };
 const labelCls = "mb-1 block text-xs font-medium";
 
 interface UserRow {
   id: string;
   name: string;
-  email: string | null;
-  createdAt: string;
+  email: string;
   clientIds: string[];
 }
 interface ClientOption {
   id: string;
   name: string;
-  userId: string | null;
+  clerkUserId: string | null;
 }
 
+/**
+ * Admin-only client assignment. Users sign in through Clerk (magic-link/Google,
+ * optional MFA) and are created/removed in the Clerk dashboard — here the admin
+ * only decides which businesses each user can see.
+ */
 export function UsersManager({ users, clients }: { users: UserRow[]; clients: ClientOption[] }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-
-  // Create form
-  const [showCreate, setShowCreate] = useState(false);
-  const [draft, setDraft] = useState({ name: "", email: "", passcode: "" });
-
-  // Per-user edit state
   const [editId, setEditId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState({ name: "", email: "", passcode: "", clientIds: [] as string[] });
-
-  async function createUser() {
-    setBusy(true);
-    setMsg(null);
-    const res = await fetch("/api/users", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(draft),
-    });
-    const json = await res.json().catch(() => ({}));
-    setBusy(false);
-    if (!res.ok) {
-      setMsg(`⚠️ ${json.error ?? "Could not create user."}`);
-      return;
-    }
-    setDraft({ name: "", email: "", passcode: "" });
-    setShowCreate(false);
-    setMsg("✅ User created — share the passcode with them privately.");
-    router.refresh();
-  }
+  const [draftIds, setDraftIds] = useState<string[]>([]);
 
   function startEdit(u: UserRow) {
     setEditId(u.id);
-    setEditDraft({ name: u.name, email: u.email ?? "", passcode: "", clientIds: [...u.clientIds] });
+    setDraftIds([...u.clientIds]);
     setMsg(null);
   }
 
-  async function saveEdit() {
-    if (!editId) return;
+  function toggleClient(clientId: string) {
+    setDraftIds((d) => (d.includes(clientId) ? d.filter((c) => c !== clientId) : [...d, clientId]));
+  }
+
+  async function save(userId: string) {
     setBusy(true);
-    const body: Record<string, unknown> = {
-      name: editDraft.name,
-      email: editDraft.email,
-      clientIds: editDraft.clientIds,
-    };
-    if (editDraft.passcode.trim()) body.passcode = editDraft.passcode.trim();
-    const res = await fetch(`/api/users/${editId}`, {
+    const res = await fetch(`/api/users/${userId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ clientIds: draftIds }),
     });
     const json = await res.json().catch(() => ({}));
     setBusy(false);
@@ -81,75 +53,25 @@ export function UsersManager({ users, clients }: { users: UserRow[]; clients: Cl
       return;
     }
     setEditId(null);
-    setMsg(editDraft.passcode.trim() ? "✅ Saved — new passcode is active immediately." : "✅ Saved.");
+    setMsg("✅ Assignments saved.");
     router.refresh();
-  }
-
-  async function removeUser(id: string, name: string) {
-    if (!window.confirm(`Delete ${name}'s login? Their businesses stay — they just become unassigned.`)) return;
-    setBusy(true);
-    await fetch(`/api/users/${id}`, { method: "DELETE" });
-    setBusy(false);
-    router.refresh();
-  }
-
-  function toggleClient(clientId: string) {
-    setEditDraft((d) => ({
-      ...d,
-      clientIds: d.clientIds.includes(clientId) ? d.clientIds.filter((c) => c !== clientId) : [...d.clientIds, clientId],
-    }));
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-2xl font-semibold" style={{ color: "var(--ink-primary)" }}>Users</h1>
-          <p className="mt-1 text-sm" style={{ color: "var(--ink-tertiary)" }}>
-            Client logins. Each user signs in with their passcode and sees only the businesses you assign them.
-          </p>
-        </div>
-        <button
-          onClick={() => { setShowCreate((v) => !v); setMsg(null); }}
-          className="rounded-[var(--radius-sm)] px-4 py-2 text-sm font-medium text-[#1a0f08] transition-transform active:scale-[0.97]"
-          style={{ background: "var(--accent)" }}
-        >
-          {showCreate ? "Cancel" : "+ New User"}
-        </button>
+      <div>
+        <h1 className="font-display text-2xl font-semibold" style={{ color: "var(--ink-primary)" }}>Users</h1>
+        <p className="mt-1 text-sm" style={{ color: "var(--ink-tertiary)" }}>
+          Sign-in is handled by Clerk — add or remove people in the Clerk dashboard. Here you choose which
+          businesses each person can see.
+        </p>
       </div>
 
       {msg && <p className="text-sm" style={{ color: "var(--ink-secondary)" }}>{msg}</p>}
 
-      {showCreate && (
-        <section className="space-y-3 rounded-[var(--radius-lg)] p-5" style={{ background: "var(--surface-1)", border: "1px solid var(--line-subtle)" }}>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div>
-              <label className={labelCls} style={{ color: "var(--ink-tertiary)" }}>Name</label>
-              <input className={inputCls} style={inputStyle} value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Jordan (Unity Studio)" />
-            </div>
-            <div>
-              <label className={labelCls} style={{ color: "var(--ink-tertiary)" }}>Email (optional)</label>
-              <input className={inputCls} style={inputStyle} value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} placeholder="owner@business.com" />
-            </div>
-            <div>
-              <label className={labelCls} style={{ color: "var(--ink-tertiary)" }}>Passcode (min 8 chars)</label>
-              <input className={inputCls} style={inputStyle} value={draft.passcode} onChange={(e) => setDraft({ ...draft, passcode: e.target.value })} placeholder="something-memorable-42" />
-            </div>
-          </div>
-          <button
-            onClick={createUser}
-            disabled={busy || !draft.name.trim() || draft.passcode.trim().length < 8}
-            className="rounded-[var(--radius-sm)] px-4 py-2 text-sm font-semibold text-[#1a0f08] transition-transform active:scale-[0.97] disabled:opacity-50"
-            style={{ background: "var(--accent)" }}
-          >
-            {busy ? "Creating…" : "Create user"}
-          </button>
-        </section>
-      )}
-
-      {users.length === 0 && !showCreate ? (
+      {users.length === 0 ? (
         <div className="rounded-[var(--radius-lg)] p-10 text-center" style={{ border: "1px dashed var(--line-standard)", color: "var(--ink-tertiary)" }}>
-          No users yet. Create one and assign their businesses — they log in with just a passcode.
+          No users yet. Invite people from the Clerk dashboard; once they sign in they&apos;ll appear here to assign.
         </div>
       ) : (
         <div className="space-y-3">
@@ -160,43 +82,25 @@ export function UsersManager({ users, clients }: { users: UserRow[]; clients: Cl
                   <div>
                     <h3 className="font-display text-sm font-semibold" style={{ color: "var(--ink-primary)" }}>{u.name}</h3>
                     <p className="mt-0.5 text-xs" style={{ color: "var(--ink-muted)" }}>
-                      {u.email || "no email"} · joined {u.createdAt} ·{" "}
+                      {u.email || "no email"} ·{" "}
                       {u.clientIds.length === 0
                         ? "no businesses assigned"
                         : clients.filter((c) => u.clientIds.includes(c.id)).map((c) => c.name).join(", ")}
                     </p>
                   </div>
-                  <div className="flex gap-2">
-                    <button onClick={() => startEdit(u)} className="rounded-[var(--radius-sm)] px-3 py-1.5 text-xs" style={{ border: "1px solid var(--line-standard)", color: "var(--ink-secondary)" }}>
-                      Edit / assign
-                    </button>
-                    <button onClick={() => removeUser(u.id, u.name)} disabled={busy} className="rounded-[var(--radius-sm)] px-3 py-1.5 text-xs disabled:opacity-50" style={{ border: "1px solid rgba(251,113,133,0.35)", color: "var(--danger)" }}>
-                      Delete
-                    </button>
-                  </div>
+                  <button onClick={() => startEdit(u)} className="rounded-[var(--radius-sm)] px-3 py-1.5 text-xs" style={{ border: "1px solid var(--line-standard)", color: "var(--ink-secondary)" }}>
+                    Assign businesses
+                  </button>
                 </div>
               ) : (
                 <div className="space-y-3">
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    <div>
-                      <label className={labelCls} style={{ color: "var(--ink-tertiary)" }}>Name</label>
-                      <input className={inputCls} style={inputStyle} value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })} />
-                    </div>
-                    <div>
-                      <label className={labelCls} style={{ color: "var(--ink-tertiary)" }}>Email</label>
-                      <input className={inputCls} style={inputStyle} value={editDraft.email} onChange={(e) => setEditDraft({ ...editDraft, email: e.target.value })} />
-                    </div>
-                    <div>
-                      <label className={labelCls} style={{ color: "var(--ink-tertiary)" }}>New passcode (blank = keep current)</label>
-                      <input className={inputCls} style={inputStyle} value={editDraft.passcode} onChange={(e) => setEditDraft({ ...editDraft, passcode: e.target.value })} placeholder="min 8 characters" />
-                    </div>
-                  </div>
                   <div>
+                    <h3 className="font-display text-sm font-semibold" style={{ color: "var(--ink-primary)" }}>{u.name}</h3>
                     <span className={labelCls} style={{ color: "var(--ink-tertiary)" }}>Assigned businesses</span>
                     <div className="flex flex-wrap gap-2">
                       {clients.map((c) => {
-                        const mine = editDraft.clientIds.includes(c.id);
-                        const ownedByOther = c.userId && c.userId !== u.id && !mine;
+                        const mine = draftIds.includes(c.id);
+                        const ownedByOther = c.clerkUserId && c.clerkUserId !== u.id && !mine;
                         return (
                           <button
                             key={c.id}
@@ -219,7 +123,7 @@ export function UsersManager({ users, clients }: { users: UserRow[]; clients: Cl
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <button onClick={saveEdit} disabled={busy} className="rounded-[var(--radius-sm)] px-4 py-2 text-sm font-semibold text-[#1a0f08] transition-transform active:scale-[0.97] disabled:opacity-50" style={{ background: "var(--accent)" }}>
+                    <button onClick={() => save(u.id)} disabled={busy} className="rounded-[var(--radius-sm)] px-4 py-2 text-sm font-semibold text-[#1a0f08] transition-transform active:scale-[0.97] disabled:opacity-50" style={{ background: "var(--accent)" }}>
                       {busy ? "Saving…" : "Save"}
                     </button>
                     <button onClick={() => setEditId(null)} className="rounded-[var(--radius-sm)] px-4 py-2 text-sm" style={{ border: "1px solid var(--line-standard)", color: "var(--ink-secondary)" }}>

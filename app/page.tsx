@@ -55,7 +55,7 @@ export default async function Dashboard() {
         acknowledged: false,
         // Users see alerts on their own campaigns; system-wide (no-campaign)
         // alerts are the admin's problem, not the client's.
-        ...(admin ? {} : { campaign: { client: { userId: session.userId } } }),
+        ...(admin ? {} : { campaign: { client: { clerkUserId: session.userId } } }),
       },
       orderBy: { createdAt: "desc" },
       take: 10,

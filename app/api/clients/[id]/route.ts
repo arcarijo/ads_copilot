@@ -14,7 +14,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const client = await prisma.client.findUnique({
     where: { id },
     select: {
-      id: true, name: true, contactEmail: true, userId: true, reportFrequency: true,
+      id: true, name: true, contactEmail: true, clerkUserId: true, reportFrequency: true,
       website: true, socialLinksJson: true, gmbUrl: true,
       metaAdAccountId: true, metaPageId: true, metaSystemUserId: true,
       metaSystemUserName: true, metaAppId: true,
@@ -52,7 +52,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     delete b.metaAdAccountId; delete b.metaPageId; delete b.metaAccessToken;
     delete b.metaSystemUserName; delete b.metaSystemUserId; delete b.metaAppId; delete b.metaAppToken;
   }
-  if (admin && b.userId !== undefined) data.userId = b.userId || null;
+  if (admin && b.clerkUserId !== undefined) data.clerkUserId = b.clerkUserId || null;
   if (b.name !== undefined) data.name = String(b.name).trim() || undefined;
   if (b.contactEmail !== undefined) data.contactEmail = b.contactEmail || null;
   if (b.website !== undefined) data.website = b.website || null;

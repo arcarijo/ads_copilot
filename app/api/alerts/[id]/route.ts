@@ -10,9 +10,9 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   if (auth.session.role === "user") {
     const alert = await prisma.alert.findUnique({
       where: { id },
-      select: { campaign: { select: { client: { select: { userId: true } } } } },
+      select: { campaign: { select: { client: { select: { clerkUserId: true } } } } },
     });
-    if (alert?.campaign?.client?.userId !== auth.session.userId) {
+    if (alert?.campaign?.client?.clerkUserId !== auth.session.userId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
   }

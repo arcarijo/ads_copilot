@@ -59,14 +59,3 @@ export function decryptSecret(stored: string): string {
   return Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
 }
 
-/**
- * Peppered passcode hash (v2). HMAC-style: sha256(pepper || passcode) with the
- * stable CREDS_SECRET as pepper, "v2:" prefixed so login can distinguish it
- * from legacy unsalted sha256 rows and upgrade them on first successful login.
- * Returns null when no pepper is configured (caller falls back to legacy).
- */
-export function passcodeHashV2(passcode: string): string | null {
-  const secret = process.env.CREDS_SECRET;
-  if (!secret) return null;
-  return "v2:" + createHash("sha256").update(`${secret}:passcode:${passcode}`, "utf8").digest("hex");
-}

@@ -1,55 +1,48 @@
-import { NextRequest, NextResponse } from "next/server";
-import { sessionSecret, verifySession } from "./lib/session";
+import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { NextResponse } from "next/server";
 
 /**
- * Site-wide auth gate. The app is publicly reachable but every page and API
- * (except /login and the Bearer-secured /api/cron) requires a valid signed
- * session cookie — either the master admin or a client user. Admin-only
- * surfaces (/users) are additionally role-checked here at the edge; data
- * scoping happens server-side in each page/route via lib/auth.ts.
+ * Clerk owns the session; this gate decides route access. Public routes need no
+ * session (sign-in + the Bearer-secured operational endpoints, which enforce
+ * their own auth). Everything else requires a signed-in Clerk user. Admin
+ * surfaces additionally require the "admin" role claim — checked here at the
+ * edge and again server-side in requireSession("admin") for defense in depth.
  */
-export async function middleware(req: NextRequest) {
-  const { pathname } = req.nextUrl;
-  if (
-    pathname === "/login" ||
-    pathname === "/api/login" ||
-    pathname === "/api/cron" ||
-    pathname === "/api/admin/encrypt" || // enforces its own admin/Bearer auth
-    pathname === "/api/admin/rls" || // enforces its own admin/Bearer auth
+const isPublic = createRouteMatcher([
+  "/login", // public marketing landing (the storefront)
+  "/sign-in(.*)",
+  "/api/cron",
+  "/api/admin/encrypt",
+  "/api/admin/rls",
+]);
+const isAdminOnly = createRouteMatcher(["/users(.*)", "/api/users(.*)"]);
 
-    pathname.startsWith("/_next") ||
-    pathname === "/favicon.ico"
-  ) {
-    return NextResponse.next();
+export default clerkMiddleware(async (auth, req) => {
+  if (isPublic(req)) return;
+
+  const { userId, sessionClaims } = await auth();
+  if (!userId) {
+    // Signed-out: APIs get 401; pages go to the /login storefront, whose
+    // "Sign in" CTA hands off to Clerk's /sign-in.
+    return req.nextUrl.pathname.startsWith("/api/")
+      ? NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+      : NextResponse.redirect(new URL("/login", req.url));
   }
 
-  const secret = sessionSecret();
-  if (!secret) {
-    return new NextResponse("Auth secret is not configured — refusing to serve.", { status: 503 });
-  }
-
-  const session = await verifySession(req.cookies.get("adm")?.value, secret);
-  if (session) {
-    const adminOnly = pathname === "/users" || pathname.startsWith("/users/") || pathname.startsWith("/api/users");
-    if (adminOnly && session.role !== "admin") {
-      if (pathname.startsWith("/api/")) {
-        return NextResponse.json({ error: "Admin only" }, { status: 403 });
-      }
-      const url = req.nextUrl.clone();
-      url.pathname = "/";
-      return NextResponse.redirect(url);
+  if (isAdminOnly(req)) {
+    const role = (sessionClaims as { metadata?: { role?: string } } | null)?.metadata?.role;
+    if (role !== "admin") {
+      return req.nextUrl.pathname.startsWith("/api/")
+        ? NextResponse.json({ error: "Admin only" }, { status: 403 })
+        : NextResponse.redirect(new URL("/", req.url));
     }
-    return NextResponse.next();
   }
-
-  if (pathname.startsWith("/api/")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  const url = req.nextUrl.clone();
-  url.pathname = "/login";
-  return NextResponse.redirect(url);
-}
+});
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image).*)"],
+  matcher: [
+    // Skip Next.js internals and static files, run on everything else.
+    "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
+    "/(api|trpc)(.*)",
+  ],
 };
