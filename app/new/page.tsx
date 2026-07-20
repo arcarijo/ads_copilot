@@ -84,6 +84,8 @@ export default function NewCampaign() {
   const [ageMin, setAgeMin] = useState("");
   const [ageMax, setAgeMax] = useState("");
   const [gender, setGender] = useState<"ALL" | "MALE" | "FEMALE">("ALL");
+  const [checking, setChecking] = useState(false);
+  const [checkResult, setCheckResult] = useState<{ score: number; verdict: string; gaps: string[]; suggestions: string[] } | null>(null);
   const [budgetDollars, setBudgetDollars] = useState(250);
   const [budgetType, setBudgetType] = useState<"DAILY" | "LIFETIME">("LIFETIME");
   const [durationDays, setDurationDays] = useState(14);
@@ -140,6 +142,32 @@ export default function NewCampaign() {
     ]);
   }
 
+  function buildTargeting() {
+    return {
+      locations: locations.map((l) => ({ name: l.name.trim(), radiusKm: l.radiusKm })).filter((l) => l.name),
+      ageMin: ageMin === "" ? undefined : Number(ageMin),
+      ageMax: ageMax === "" ? undefined : Number(ageMax),
+      gender,
+    };
+  }
+
+  async function checkTargeting() {
+    setChecking(true);
+    setCheckResult(null);
+    try {
+      const res = await fetch("/api/campaigns/check-targeting", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ goal, targetAudience, targeting: buildTargeting() }),
+      });
+      const json = await res.json();
+      setCheckResult(json.error ? { score: 0, verdict: json.error, gaps: [], suggestions: [] } : json);
+    } catch {
+      setCheckResult({ score: 0, verdict: "Couldn't run the check. Try again.", gaps: [], suggestions: [] });
+    }
+    setChecking(false);
+  }
+
   async function submitToCopilot(clarificationAnswers?: Record<string, string>) {
     setBusy(true);
     setError(null);
@@ -154,12 +182,7 @@ export default function NewCampaign() {
         landingPageUrl,
         targetAudience,
         geography: locations.map((l) => `${l.name.trim()} (${l.radiusKm}km)`).filter((s) => s.length > 6).join("; "),
-        targeting: {
-          locations: locations.map((l) => ({ name: l.name.trim(), radiusKm: l.radiusKm })).filter((l) => l.name),
-          ageMin: ageMin === "" ? undefined : Number(ageMin),
-          ageMax: ageMax === "" ? undefined : Number(ageMax),
-          gender,
-        },
+        targeting: buildTargeting(),
         budgetDollars,
         budgetType,
         durationDays,
@@ -373,6 +396,48 @@ export default function NewCampaign() {
                   </div>
                 </div>
                 <p className="text-xs text-[var(--ink-muted)]">Leave age/gender blank to let the AI decide from your audience description.</p>
+
+                <div className="rounded-lg border border-[var(--line-subtle)] bg-[var(--surface-2)] p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm font-medium text-[var(--ink-primary)]">Not sure it&rsquo;s enough for Meta?</span>
+                    <button
+                      type="button"
+                      onClick={checkTargeting}
+                      disabled={checking || !targetAudience.trim()}
+                      className="shrink-0 rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold text-black hover:bg-[var(--accent-strong)] disabled:opacity-50"
+                    >
+                      {checking ? "Checking…" : "Check my targeting"}
+                    </button>
+                  </div>
+                  {checkResult && (
+                    <div className="mt-3 space-y-2 text-xs">
+                      <p className="font-medium text-[var(--ink-primary)]">
+                        Readiness: {checkResult.score}/100 —{" "}
+                        <span className="font-normal text-[var(--ink-secondary)]">{checkResult.verdict}</span>
+                      </p>
+                      {checkResult.gaps.length > 0 && (
+                        <div>
+                          <p className="font-medium text-[var(--warning)]">Gaps</p>
+                          <ul className="list-disc pl-5 text-[var(--ink-secondary)]">
+                            {checkResult.gaps.map((g, i) => (
+                              <li key={i}>{g}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {checkResult.suggestions.length > 0 && (
+                        <div>
+                          <p className="font-medium text-[var(--success)]">Suggestions</p>
+                          <ul className="list-disc pl-5 text-[var(--ink-secondary)]">
+                            {checkResult.suggestions.map((s, i) => (
+                              <li key={i}>{s}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </>
             )}
 
