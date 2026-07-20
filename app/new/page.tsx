@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CopilotPlan, CreativeInput } from "@/lib/types";
 
@@ -77,6 +77,20 @@ export default function NewCampaign() {
   const [durationDays, setDurationDays] = useState(14);
   const [abTest, setAbTest] = useState(false);
   const [abVariable, setAbVariable] = useState<"CREATIVE" | "AUDIENCE">("CREATIVE");
+  const [abNotes, setAbNotes] = useState("");
+  const [campaignDirective, setCampaignDirective] = useState("");
+
+  // Daily optimizer runs at 09:00 UTC (vercel.json cron). Show it in the
+  // viewer's local time so they know their deadline to set directives.
+  const localCheckTime = useMemo(() => {
+    try {
+      const d = new Date();
+      d.setUTCHours(9, 0, 0, 0);
+      return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+    } catch {
+      return "";
+    }
+  }, []);
   const [creatives, setCreatives] = useState<CreativeInput[]>([
     { kind: "IMAGE", label: "Creative A", filePaths: [""], primaryText: "", headline: "", linkUrl: "" },
   ]);
@@ -124,6 +138,8 @@ export default function NewCampaign() {
         creatives: creatives.map((c) => ({ ...c, filePaths: c.filePaths.filter(Boolean) })),
         abTest,
         abVariable: abTest ? abVariable : undefined,
+        abNotes: abTest ? abNotes : undefined,
+        campaignDirective,
         clarificationAnswers,
       }),
     });
@@ -245,11 +261,31 @@ export default function NewCampaign() {
               <>
                 <div>
                   <label className={labelCls}>Describe your target audience</label>
-                  <textarea className={inputCls} rows={3} value={targetAudience} onChange={(e) => setTargetAudience(e.target.value)} placeholder="Engaged couples 25–40 planning intimate weddings…" />
+                  <textarea
+                    className={inputCls}
+                    rows={4}
+                    value={targetAudience}
+                    onChange={(e) => setTargetAudience(e.target.value)}
+                    placeholder="e.g. Engaged couples aged 25–40 within ~40 min of Hamilton, planning intimate weddings under 80 guests. They value photography, local vendors, and an all-in-one venue."
+                  />
+                  <p className="mt-1 text-xs text-[var(--ink-muted)]">
+                    Your AI Copilot reads this and builds real Meta targeting from it. Be specific — cover <b>who</b> they
+                    are (age, life stage, interests), <b>what they want</b>, and <b>what makes them a good fit</b>. Vague
+                    answers like &ldquo;everyone nearby&rdquo; give the AI little to work with.
+                  </p>
                 </div>
                 <div>
-                  <label className={labelCls}>Where do your customers come from?</label>
-                  <input className={inputCls} value={geography} onChange={(e) => setGeography(e.target.value)} placeholder="Hamilton ON, 15km radius; also Burlington & Oakville" />
+                  <label className={labelCls}>Where should this campaign target?</label>
+                  <input
+                    className={inputCls}
+                    value={geography}
+                    onChange={(e) => setGeography(e.target.value)}
+                    placeholder="e.g. Hamilton ON (15km); Burlington; 123 King St W, Hamilton"
+                  />
+                  <p className="mt-1 text-xs text-[var(--ink-muted)]">
+                    List the cities, neighbourhoods, or addresses this campaign should reach, with a radius for each (Meta
+                    allows up to 80km per point). The Copilot validates and formats these into Meta&rsquo;s location targeting.
+                  </p>
                 </div>
               </>
             )}
@@ -268,9 +304,20 @@ export default function NewCampaign() {
                   </select>
                 </div>
                 <div>
-                  <label className={labelCls}>Run duration: {durationDays} days</label>
-                  <input type="range" min={7} max={90} step={1} className="w-full" value={durationDays} onChange={(e) => setDurationDays(Number(e.target.value))} />
-                  <div className="flex justify-between text-xs text-[var(--ink-muted)]"><span>1 week</span><span>3 months</span></div>
+                  <label className={labelCls}>Run duration (days)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={90}
+                    step={1}
+                    className={inputCls}
+                    value={durationDays}
+                    onChange={(e) => {
+                      const n = Math.round(Number(e.target.value));
+                      setDurationDays(Number.isFinite(n) && n > 0 ? Math.min(90, n) : 1);
+                    }}
+                  />
+                  <p className="mt-1 text-xs text-[var(--ink-muted)]">How many days this campaign runs (1–90).</p>
                 </div>
               </>
             )}
@@ -334,8 +381,43 @@ export default function NewCampaign() {
                           ⚠️ Only one creative added. A creative split needs 2+. It will launch as a single campaign unless you add another creative above — or turn A/B off.
                         </p>
                       )}
+                      <div className="mt-3">
+                        <label className={labelCls}>What&rsquo;s different between A and B — and what should the AI watch for?</label>
+                        <textarea
+                          className={inputCls}
+                          rows={3}
+                          value={abNotes}
+                          onChange={(e) => setAbNotes(e.target.value)}
+                          placeholder="e.g. A leads with a video venue tour, B with a photo + starting price. Watch which drives more booking inquiries at a lower cost per lead; favour the winner after ~50 conversions."
+                        />
+                        <p className="mt-1 text-xs text-[var(--ink-muted)]">
+                          The Copilot uses this to judge the test each day and lean toward the winner. Editable after launch.
+                        </p>
+                      </div>
                     </div>
                   )}
+                </div>
+
+                {/* Campaign directive + daily-check transparency */}
+                <div className="rounded-lg border border-[var(--line-subtle)] p-4">
+                  <label className={labelCls}>
+                    Campaign directive <span className="font-normal text-[var(--ink-muted)]">— optional</span>
+                  </label>
+                  <textarea
+                    className={inputCls}
+                    rows={3}
+                    value={campaignDirective}
+                    onChange={(e) => setCampaignDirective(e.target.value)}
+                    placeholder="e.g. Prioritise weekday corporate bookings over weekend weddings for this campaign; keep spend flat; favour the video creative."
+                  />
+                  <p className="mt-1 text-xs text-[var(--ink-muted)]">
+                    Context and goals specific to <b>this campaign</b> — separate from your business-wide Manager Directive.
+                    The AI weighs it first every day, and you can edit it after launch.
+                  </p>
+                  <p className="mt-2 rounded-lg bg-[var(--surface-2)] px-3 py-2 text-xs text-[var(--ink-secondary)]">
+                    ⏱️ The AI reviews and optimizes daily at <b>9:00&nbsp;AM UTC</b>
+                    {localCheckTime ? ` (${localCheckTime} your time)` : ""}. Set or update directives before then to steer the next check.
+                  </p>
                 </div>
               </>
             )}
@@ -400,7 +482,8 @@ export default function NewCampaign() {
           </div>
           <p className="text-xs text-[var(--ink-muted)]">
             This budget becomes a database-enforced ceiling. The daily optimizer can pause underperformers but can never
-            raise spend without your emailed approval.
+            raise spend without your emailed approval. It reviews this campaign daily at <b>9:00&nbsp;AM UTC</b>
+            {localCheckTime ? ` (${localCheckTime} your time)` : ""}.
           </p>
 
           {/* Preflight validation gate */}

@@ -84,6 +84,8 @@ export interface QuestionnaireInput {
   creatives: CreativeInput[];
   abTest: boolean;
   abVariable?: "CREATIVE" | "AUDIENCE";
+  abNotes?: string;
+  campaignDirective?: string;
   clarificationAnswers?: Record<string, string>;
 }
 
@@ -132,6 +134,12 @@ export async function runCopilot(input: QuestionnaireInput): Promise<CopilotResu
     "=== BUSINESS PROFILE ===",
     businessInfo,
     audienceBlock ? `=== PERSISTENT AUDIENCE ASSETS ===\n${audienceBlock}` : "",
+    input.campaignDirective?.trim()
+      ? `=== CAMPAIGN DIRECTIVE (highest priority for THIS campaign — a human set this; honor it in the plan) ===\n${input.campaignDirective.trim()}`
+      : "",
+    input.abTest && input.abNotes?.trim()
+      ? `=== A/B TEST INTENT (what differs between A and B, and what the optimizer should watch) ===\n${input.abNotes.trim()}`
+      : "",
     "=== USER QUESTIONNAIRE ===",
     JSON.stringify({ ...input, budgetCents }, null, 2),
     input.clarificationAnswers && Object.keys(input.clarificationAnswers).length

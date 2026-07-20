@@ -154,6 +154,13 @@ model Campaign {
   creativesJson      String   @default("[]")
   abTest             Boolean  @default(false)
   abVariable         String? // CREATIVE | AUDIENCE
+  // A/B context: what specifically differs between A and B and what the AI
+  // should watch for. Editable after launch; fed to the copilot + optimizer.
+  abNotes            String?
+  // Per-campaign directive (distinct from the client-level Manager Directive):
+  // context/goals for THIS campaign. Editable after launch; weighed daily.
+  directive          String?
+  directiveAt        DateTime?
   aiPlanJson         String?
   clarificationsJson String?
   metaCampaignId     String?
