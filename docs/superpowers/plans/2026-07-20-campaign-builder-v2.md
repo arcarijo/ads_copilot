@@ -26,7 +26,16 @@
 - [x] Schema: additive nullable `Campaign.abNotes/directive/directiveAt`.
 - [x] `lib/targeting.ts` prepped.
 
-## Slice 2 — TODO (next session)
+## Slice 2 — DONE (commits 6b51ba4, d924228, cb35102, 05d8f0c; static red-team GO)
+- [x] Structured location rows + optional age/gender; `lib/targeting.ts` wired (validate/format; user age/gender overrides the model).
+- [x] Editable directive/abNotes after launch — `PATCH /api/campaigns/[id]` + `DirectiveEditor` on the campaign page (shows 9am-UTC check time).
+- [x] Optimizer weighs the campaign directive + A/B intent daily.
+- [x] Audience gap-checker — `POST /api/campaigns/check-targeting` + "Check my targeting" button (Cloudflare Workers AI / Llama-70B).
+- [x] Google Drive media — `lib/drive.ts` normalize + `meta.uploadVideoFromUrl` (file_url→video_id) + launcher wiring; images use the URL directly. No bytes stored.
+
+**Remaining follow-ups (optional):** very-large-video chunked upload (current path is Meta `file_url`); Meta geo-catalog validation of exact city keys; interests as explicit input. Ship the additive columns (`db:push` staging→prod, prod via `!`) before merging — see Ship steps below.
+
+## (original Slice 2 task notes — kept for reference)
 
 - [ ] **Structured location UI.** Replace the free-text "Where should this campaign target?" input with rows of `{ name, radiusKm }` (add/remove; radius 1–80). Store `locations[]` in form state; on submit send `targeting: { locations, ageMin, ageMax, gender }`. Adapt the profile prefill (currently sets `geography`) to seed `locations[0].name`. Keep sending a `geography` summary string for backward-compat (derive from locations).
 - [ ] **Age + gender controls** in Step 2 (optional; blank = AI decides).
