@@ -487,15 +487,23 @@ export default function NewCampaign() {
                     </div>
                     <div>
                       <label className={labelCls}>
-                        {c.kind === "CAROUSEL" ? "Image file paths (one per line, 2–10)" : c.kind === "VIDEO" ? "Video file path" : "Image file path"}
+                        {c.kind === "CAROUSEL"
+                          ? "Image links (Google Drive or https, one per line, 2–10)"
+                          : c.kind === "VIDEO"
+                            ? "Video — Google Drive share link (or public https URL)"
+                            : "Image — Google Drive share link (or public https URL)"}
                       </label>
                       <textarea
                         className={inputCls}
                         rows={c.kind === "CAROUSEL" ? 3 : 1}
                         value={c.filePaths.join("\n")}
                         onChange={(e) => updateCreative(i, { filePaths: e.target.value.split("\n") })}
-                        placeholder={c.kind === "VIDEO" ? "/assets/venue-tour.mp4" : "/assets/venue-hero.jpg"}
+                        placeholder="https://drive.google.com/file/d/1AbC…/view"
                       />
+                      <p className="mt-1 text-xs text-[var(--ink-muted)]">
+                        Paste the Drive share link and set its sharing to <b>&ldquo;Anyone with the link&rdquo;</b> so Meta can
+                        fetch it at launch — we don&rsquo;t copy or store your media.
+                      </p>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
