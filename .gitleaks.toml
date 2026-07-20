@@ -1,0 +1,17 @@
+# gitleaks config for the red-team secrets scan. Extends the default ruleset
+# and allowlists paths that only ever contain placeholders, not real secrets:
+#   - vendored agent skills (installed docs/templates, e.g. Clerk's "YOUR_SECRET_KEY")
+#   - the committed .env example templates
+title = "ads_copilot gitleaks"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Vendored skill docs + example env templates (placeholders only)"
+paths = [
+  '''\.claude/.*''',
+  '''\.agents/.*''',
+  '''\.env\.example''',
+  '''\.env\.redteam\.example''',
+]

@@ -5,10 +5,17 @@ node_modules/
 .next/
 next-env.d.ts
 
-# Environment / secrets — ignore ALL env files, keep only the example
+# Environment / secrets — ignore ALL env files, keep only the examples
 .env
 .env.*
 !.env.example
+!.env.redteam.example
+
+# Red-team cycle output (reports + scanner artifacts — never commit)
+scripts/redteam/report/report-*.md
+scripts/redteam/report/report-*.json
+scripts/redteam/report/*.html
+.redteam-gitleaks.json
 
 # Databases
 *.db
