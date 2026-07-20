@@ -15,13 +15,49 @@ export async function currentClerkPrincipal(): Promise<{ userId: string; role?: 
   return { userId, role };
 }
 
-/** Admin-only: the Clerk users, shaped for the client-assignment UI. */
-export async function listClerkUsers(): Promise<{ id: string; email: string; name: string }[]> {
+export interface ClerkUserRow {
+  id: string;
+  email: string;
+  name: string;
+  role: string | null;
+  banned: boolean;
+  lastSignInAt: number | null;
+}
+
+/** Admin-only: the Clerk users, shaped for the management UI. */
+export async function listClerkUsers(): Promise<ClerkUserRow[]> {
   const client = await clerkClient();
-  const res = await client.users.getUserList({ limit: 100 });
+  const res = await client.users.getUserList({ limit: 100, orderBy: "-created_at" });
   return res.data.map((u) => ({
     id: u.id,
     email: u.primaryEmailAddress?.emailAddress ?? "",
     name: [u.firstName, u.lastName].filter(Boolean).join(" ") || u.username || "(no name)",
+    role: ((u.publicMetadata as { role?: string } | null)?.role as string) ?? null,
+    banned: Boolean(u.banned),
+    lastSignInAt: u.lastSignInAt ?? null,
   }));
+}
+
+/** Admin-only: email an invitation to join. They become a Clerk user on accept. */
+export async function inviteClerkUser(email: string): Promise<void> {
+  const client = await clerkClient();
+  await client.invitations.createInvitation({
+    emailAddress: email,
+    ignoreExisting: true,
+  });
+}
+
+/** Admin-only: grant or remove the admin role via publicMetadata. */
+export async function setClerkUserRole(userId: string, admin: boolean): Promise<void> {
+  const client = await clerkClient();
+  await client.users.updateUserMetadata(userId, {
+    publicMetadata: { role: admin ? "admin" : null },
+  });
+}
+
+/** Admin-only: revoke (ban) or restore a user's ability to sign in. */
+export async function setClerkUserBanned(userId: string, banned: boolean): Promise<void> {
+  const client = await clerkClient();
+  if (banned) await client.users.banUser(userId);
+  else await client.users.unbanUser(userId);
 }
