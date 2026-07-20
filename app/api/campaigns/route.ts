@@ -5,6 +5,7 @@ import { runResearch } from "@/lib/research";
 import { requireSession, campaignScope, canAccessClient, canAccessCampaign } from "@/lib/auth";
 import { aiRateLimited } from "@/lib/rateLimit";
 import { cleanText } from "@/lib/sanitize";
+import { validateTargeting } from "@/lib/targeting";
 
 export async function GET() {
   const auth = await requireSession();
@@ -50,6 +51,10 @@ export async function POST(req: NextRequest) {
     // and by the daily optimizer once wired; editable after launch.
     const directive = cleanText(input.campaignDirective ?? "", 2000);
     const abNotes = input.abTest ? cleanText(input.abNotes ?? "", 2000) : "";
+    // Sanitize/validate structured targeting (locations + age/gender) up front.
+    const tv = validateTargeting(input.targeting);
+    if ("error" in tv) return NextResponse.json({ error: tv.error }, { status: 422 });
+    input.targeting = tv.values;
     const campaign = input.campaignId
       ? await prisma.campaign.findUniqueOrThrow({ where: { id: input.campaignId } })
       : await prisma.campaign.create({

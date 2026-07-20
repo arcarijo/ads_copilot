@@ -5,6 +5,7 @@ import { getGroundTruth } from "./research";
 import { COPILOT_SYSTEM_PROMPT } from "./prompts";
 import { assertBudgetAllowed, MIN_BUDGET_CENTS } from "./guardrails";
 import { CopilotResult, CreativeInput, MetaTargeting } from "./types";
+import { TargetingInput, formatTargetingForModel, metaGenders } from "./targeting";
 
 const targetingSchema = z.object({
   geo_locations: z.object({
@@ -86,6 +87,7 @@ export interface QuestionnaireInput {
   abVariable?: "CREATIVE" | "AUDIENCE";
   abNotes?: string;
   campaignDirective?: string;
+  targeting?: TargetingInput; // structured, app-validated location + age/gender
   clarificationAnswers?: Record<string, string>;
 }
 
@@ -139,6 +141,9 @@ export async function runCopilot(input: QuestionnaireInput): Promise<CopilotResu
       : "",
     input.abTest && input.abNotes?.trim()
       ? `=== A/B TEST INTENT (what differs between A and B, and what the optimizer should watch) ===\n${input.abNotes.trim()}`
+      : "",
+    input.targeting && formatTargetingForModel(input.targeting)
+      ? `=== STRUCTURED TARGETING (user-set — build geo_locations from these; honor age/gender exactly) ===\n${formatTargetingForModel(input.targeting)}`
       : "",
     "=== USER QUESTIONNAIRE ===",
     JSON.stringify({ ...input, budgetCents }, null, 2),
@@ -197,6 +202,19 @@ export async function runCopilot(input: QuestionnaireInput): Promise<CopilotResu
       if (t.interests) {
         t.interests = t.interests.filter((i) => validInterestIds.has(i.id));
         if (t.interests.length === 0) delete t.interests;
+      }
+    }
+
+    // The user's explicit age/gender wins over the model's guess (max control).
+    if (input.targeting) {
+      const tg = input.targeting;
+      for (const adSet of result.plan.adSets) {
+        const t = adSet.targeting as MetaTargeting;
+        if (tg.ageMin !== undefined) t.age_min = tg.ageMin;
+        if (tg.ageMax !== undefined) t.age_max = tg.ageMax;
+        const g = metaGenders(tg.gender);
+        if (g) t.genders = g;
+        else delete t.genders;
       }
     }
   }

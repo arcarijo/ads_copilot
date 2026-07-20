@@ -10,6 +10,12 @@ interface ClientOption {
   status: string;
 }
 
+interface LocationRow {
+  name: string;
+  radiusKm: number;
+}
+const MAX_RADIUS_KM = 80; // Meta's custom-location ceiling
+
 type Step = 1 | 2 | 3 | 4;
 type Phase = "FORM" | "CLARIFY" | "RECEIPT" | "LAUNCHING";
 
@@ -60,7 +66,10 @@ export default function NewCampaign() {
         const aud = (sections.audiences ?? "").trim();
         const geo = (sections.geography ?? "").trim();
         if (aud) { setTargetAudience((v) => (v.trim() ? v : aud)); filled.push("audience"); }
-        if (geo) { setGeography((v) => (v.trim() ? v : geo)); filled.push("geography"); }
+        if (geo) {
+          setLocations((locs) => (locs.length === 1 && !locs[0].name.trim() ? [{ name: geo, radiusKm: locs[0].radiusKm }] : locs));
+          filled.push("location");
+        }
         setPrefillNote(filled.length ? `Pre-filled ${filled.join(" & ")} from this client's strategy profile — edit freely.` : null);
       })
       .catch(() => {});
@@ -71,7 +80,10 @@ export default function NewCampaign() {
   const [goal, setGoal] = useState("Booking inquiries");
   const [landingPageUrl, setLandingPageUrl] = useState("");
   const [targetAudience, setTargetAudience] = useState("");
-  const [geography, setGeography] = useState("");
+  const [locations, setLocations] = useState<LocationRow[]>([{ name: "", radiusKm: 15 }]);
+  const [ageMin, setAgeMin] = useState("");
+  const [ageMax, setAgeMax] = useState("");
+  const [gender, setGender] = useState<"ALL" | "MALE" | "FEMALE">("ALL");
   const [budgetDollars, setBudgetDollars] = useState(250);
   const [budgetType, setBudgetType] = useState<"DAILY" | "LIFETIME">("LIFETIME");
   const [durationDays, setDurationDays] = useState(14);
@@ -107,6 +119,16 @@ export default function NewCampaign() {
   const [preflight, setPreflight] = useState<PreflightResult | null>(null);
   const [preflightBusy, setPreflightBusy] = useState(false);
 
+  function updateLocation(i: number, patch: Partial<LocationRow>) {
+    setLocations((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+  }
+  function addLocation() {
+    setLocations((ls) => (ls.length < 10 ? [...ls, { name: "", radiusKm: 15 }] : ls));
+  }
+  function removeLocation(i: number) {
+    setLocations((ls) => (ls.length > 1 ? ls.filter((_, j) => j !== i) : ls));
+  }
+
   function updateCreative(i: number, patch: Partial<CreativeInput>) {
     setCreatives((cs) => cs.map((c, j) => (j === i ? { ...c, ...patch } : c)));
   }
@@ -131,7 +153,13 @@ export default function NewCampaign() {
         goal,
         landingPageUrl,
         targetAudience,
-        geography,
+        geography: locations.map((l) => `${l.name.trim()} (${l.radiusKm}km)`).filter((s) => s.length > 6).join("; "),
+        targeting: {
+          locations: locations.map((l) => ({ name: l.name.trim(), radiusKm: l.radiusKm })).filter((l) => l.name),
+          ageMin: ageMin === "" ? undefined : Number(ageMin),
+          ageMax: ageMax === "" ? undefined : Number(ageMax),
+          gender,
+        },
         budgetDollars,
         budgetType,
         durationDays,
@@ -276,17 +304,75 @@ export default function NewCampaign() {
                 </div>
                 <div>
                   <label className={labelCls}>Where should this campaign target?</label>
-                  <input
-                    className={inputCls}
-                    value={geography}
-                    onChange={(e) => setGeography(e.target.value)}
-                    placeholder="e.g. Hamilton ON (15km); Burlington; 123 King St W, Hamilton"
-                  />
-                  <p className="mt-1 text-xs text-[var(--ink-muted)]">
-                    List the cities, neighbourhoods, or addresses this campaign should reach, with a radius for each (Meta
-                    allows up to 80km per point). The Copilot validates and formats these into Meta&rsquo;s location targeting.
+                  <p className="mb-2 text-xs text-[var(--ink-muted)]">
+                    Add the cities, neighbourhoods, or addresses this campaign should reach, each with a radius (Meta allows
+                    up to {MAX_RADIUS_KM}km). The app validates and formats these into Meta&rsquo;s location targeting — no guesswork.
                   </p>
+                  <div className="space-y-2">
+                    {locations.map((loc, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <input
+                          className={`${inputCls} flex-1`}
+                          value={loc.name}
+                          onChange={(e) => updateLocation(i, { name: e.target.value })}
+                          placeholder="City, neighbourhood, or address — e.g. Hamilton, ON"
+                        />
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            min={1}
+                            max={MAX_RADIUS_KM}
+                            className={`${inputCls} w-20`}
+                            value={loc.radiusKm}
+                            onChange={(e) => {
+                              const n = Math.round(Number(e.target.value));
+                              updateLocation(i, { radiusKm: Number.isFinite(n) && n > 0 ? Math.min(MAX_RADIUS_KM, n) : 1 });
+                            }}
+                          />
+                          <span className="text-xs text-[var(--ink-muted)]">km</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeLocation(i)}
+                          disabled={locations.length === 1}
+                          className="rounded-lg border border-[var(--line-standard)] px-2 py-2 text-xs text-[var(--ink-tertiary)] disabled:opacity-30"
+                          aria-label="Remove location"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  {locations.length < 10 && (
+                    <button type="button" onClick={addLocation} className="mt-2 text-sm text-[var(--success)] hover:underline">
+                      + Add another location
+                    </button>
+                  )}
                 </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className={labelCls}>
+                      Age range <span className="font-normal text-[var(--ink-muted)]">— optional</span>
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input type="number" min={18} max={65} className={`${inputCls} w-full`} value={ageMin} onChange={(e) => setAgeMin(e.target.value)} placeholder="18" />
+                      <span className="text-xs text-[var(--ink-muted)]">to</span>
+                      <input type="number" min={18} max={65} className={`${inputCls} w-full`} value={ageMax} onChange={(e) => setAgeMax(e.target.value)} placeholder="65" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className={labelCls}>
+                      Gender <span className="font-normal text-[var(--ink-muted)]">— optional</span>
+                    </label>
+                    <select className={inputCls} value={gender} onChange={(e) => setGender(e.target.value as "ALL" | "MALE" | "FEMALE")}>
+                      <option value="ALL">All</option>
+                      <option value="MALE">Men</option>
+                      <option value="FEMALE">Women</option>
+                    </select>
+                  </div>
+                </div>
+                <p className="text-xs text-[var(--ink-muted)]">Leave age/gender blank to let the AI decide from your audience description.</p>
               </>
             )}
 
