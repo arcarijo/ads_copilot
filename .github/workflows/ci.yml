@@ -1,0 +1,105 @@
+name: CI — test + risk-score + red-team
+
+# Runs on every PR to main. The static security gate works with NO secrets.
+# Dynamic (authz/DAST) + k6 against the live preview are secret-gated and get
+# wired in next session (see docs/superpowers/plans/2026-07-20-deployment-pipeline-phase1.md).
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write # to post the verdict comment
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  risk:
+    runs-on: ubuntu-latest
+    outputs:
+      tier: ${{ steps.classify.outputs.tier }}
+      reason: ${{ steps.classify.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # classifier diffs against the base
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - id: classify
+        name: Classify change risk
+        env:
+          RISK_LABEL: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: npx tsx scripts/pipeline/classify-risk.ts --base=origin/${{ github.base_ref }}
+
+  security:
+    needs: risk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+
+      # Static security pass at the classified tier. No target -> authz/dast skip
+      # cleanly; static + secrets(gitleaks) + sast(semgrep) + ssrf run via Docker
+      # (preinstalled on ubuntu runners). Non-zero exit on any FAIL fails the job.
+      - name: Red-team (static pass)
+        run: npm run redteam -- --tier=${{ needs.risk.outputs.tier }}
+
+      - name: Upload red-team report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: redteam-report
+          path: scripts/redteam/report/report-*.md
+          if-no-files-found: ignore
+
+      # Basic verdict comment. Richer formatting = Task 6 (scripts/pipeline/post-report.ts).
+      - name: Post verdict comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          report=$(ls -t scripts/redteam/report/report-*.md 2>/dev/null | head -1)
+          verdict=$(grep -m1 '^# Red-Team Report' "$report" 2>/dev/null || echo "# Red-Team Report — (no report)")
+          {
+            echo "### Pipeline result"
+            echo ""
+            echo "- **Risk tier:** T${{ needs.risk.outputs.tier }} — ${{ needs.risk.outputs.reason }}"
+            echo "- **${verdict#\# }**"
+            echo ""
+            echo "<details><summary>Red-team summary</summary>"
+            echo ""
+            echo '```'
+            sed -n '/| Check/,/^$/p' "$report" 2>/dev/null | head -20
+            echo '```'
+            echo "</details>"
+          } > comment.md
+          gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
+
+  # ---------------------------------------------------------------------------
+  # TODO (next session — secret-gated, needs the staging setup checklist):
+  #
+  # dynamic-redteam:
+  #   needs: risk
+  #   if: ${{ needs.risk.outputs.tier != '0' && secrets.VERCEL_AUTOMATION_BYPASS_SECRET != '' }}
+  #   steps:
+  #     - wait for the Vercel preview URL for this commit SHA
+  #     - npm run redteam -- --tier=${{ needs.risk.outputs.tier }} --target=<preview>
+  #       env: VERCEL_AUTOMATION_BYPASS_SECRET, CLERK_SECRET_KEY (sk_test),
+  #            DATABASE_URL (staging), REDTEAM_ADMIN_EMAIL, REDTEAM_MEMBER_EMAIL
+  #
+  # loadtest:
+  #   needs: risk
+  #   if: ${{ needs.risk.outputs.tier != '0' && secrets.VERCEL_AUTOMATION_BYPASS_SECRET != '' }}
+  #   steps:
+  #     - docker run --rm -e TARGET=<preview> -e BYPASS=<secret> -i grafana/k6 run - < load/load.js
+  # ---------------------------------------------------------------------------
