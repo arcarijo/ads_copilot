@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { prisma, log } from "@/lib/db";
 import { requireSession, canAccessCampaign } from "@/lib/auth";
+import { cleanText } from "@/lib/sanitize";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireSession();
@@ -19,4 +20,34 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   });
   if (!campaign) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json({ campaign });
+}
+
+/**
+ * Edit the per-campaign directive and/or A/B notes after launch. These steer
+ * the daily optimizer; owners can refresh them any time. Sanitized; the
+ * directive timestamp is bumped so staleness tracking stays accurate.
+ */
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireSession();
+  if (auth.response) return auth.response;
+  const { id } = await params;
+  if (!(await canAccessCampaign(auth.session, id))) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+  const b = await req.json().catch(() => ({}));
+  const data: Record<string, unknown> = {};
+  if (typeof b.directive === "string") {
+    const d = cleanText(b.directive, 2000);
+    data.directive = d || null;
+    data.directiveAt = d ? new Date() : null;
+  }
+  if (typeof b.abNotes === "string") {
+    data.abNotes = cleanText(b.abNotes, 2000) || null;
+  }
+  if (Object.keys(data).length === 0) {
+    return NextResponse.json({ error: "Nothing to update." }, { status: 422 });
+  }
+  const campaign = await prisma.campaign.update({ where: { id }, data });
+  await log("UI", `Campaign "${campaign.name}" directive/notes updated.`);
+  return NextResponse.json({ ok: true });
 }
