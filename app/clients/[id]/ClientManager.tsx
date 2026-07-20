@@ -66,6 +66,20 @@ export function ClientManager(p: ClientManagerProps) {
 
   // ---- Client info editing ----
   const [editing, setEditing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function deleteClient() {
+    if (!confirm(`Delete "${p.name}" and all of its campaigns, alerts, and profile? This cannot be undone.`)) return;
+    setDeleting(true);
+    const res = await fetch(`/api/clients/${p.id}`, { method: "DELETE" });
+    if (res.ok) {
+      router.push("/clients");
+      router.refresh();
+    } else {
+      setDeleting(false);
+      alert("Delete failed. Please try again.");
+    }
+  }
   const [info, setInfo] = useState({
     name: p.name,
     contactEmail: p.contactEmail ?? "",
@@ -665,6 +679,23 @@ export function ClientManager(p: ClientManagerProps) {
           })}
         </div>
       </section>
+
+      {p.isAdmin && (
+        <section className="rounded-[var(--radius-lg)] p-5" style={{ background: "var(--danger-wash)", border: "1px solid var(--danger)" }}>
+          <h2 className="font-display text-base font-semibold" style={{ color: "var(--danger)" }}>Danger zone</h2>
+          <p className="mt-1 text-xs" style={{ color: "var(--ink-secondary)" }}>
+            Permanently delete this ad account and every campaign, alert, and profile under it. This cannot be undone.
+          </p>
+          <button
+            onClick={deleteClient}
+            disabled={deleting}
+            className="mt-3 rounded-[var(--radius-sm)] px-4 py-2 text-sm font-semibold text-white transition-transform active:scale-[0.97] disabled:opacity-50"
+            style={{ background: "var(--danger)" }}
+          >
+            {deleting ? "Deleting…" : "Delete ad account"}
+          </button>
+        </section>
+      )}
     </div>
   );
 }
