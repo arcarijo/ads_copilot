@@ -53,7 +53,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                       className="rounded-[var(--radius-sm)] px-3 py-1.5 transition-colors hover:bg-[rgba(26,15,8,0.12)] active:bg-[rgba(26,15,8,0.2)]"
                       style={{ color: "rgba(26,15,8,0.82)" }}
                     >
-                      {admin ? "Clients" : "My Businesses"}
+                      Ad accounts
                     </Link>
                     {admin && (
                       <Link
