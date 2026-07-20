@@ -13,7 +13,7 @@ staged=$(git diff --cached --name-only --diff-filter=ACMR)
 # 1) Never commit real env / secret files (allow only .env.example)
 while IFS= read -r f; do
   case "$f" in
-    .env.example) ;;
+    .env.example|*.example) ;;  # template files are safe; step 2 still scans their content
     .env|.env.*|*/.env|*/.env.*) fail "attempt to commit env file '$f' — real secrets belong only in gitignored .env.local" ;;
     *.pem|*.key|*.p12|*.pfx|*id_rsa*|*.keystore) fail "attempt to commit key/cert file '$f'" ;;
     *settings.local.json) fail "attempt to commit local settings '$f'" ;;

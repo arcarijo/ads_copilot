@@ -6,7 +6,11 @@
     "build": "next build",
     "start": "next start",
     "db:push": "prisma db push",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "redteam": "tsx scripts/redteam/run.ts",
+    "redteam:preflight": "tsx scripts/redteam/run.ts --tier=0",
+    "redteam:standard": "tsx scripts/redteam/run.ts --tier=1",
+    "redteam:full": "tsx scripts/redteam/run.ts --tier=2"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.5.20",
@@ -23,6 +27,7 @@
     "@types/react-dom": "^19",
     "prisma": "^6.10.0",
     "tailwindcss": "^4.1.8",
+    "tsx": "^4.19.2",
     "typescript": "^5.8.3",
     "vitest": "^4.1.10"
   }

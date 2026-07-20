@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireSession, clientScope } from "@/lib/auth";
+import { validateClientFields } from "@/lib/sanitize";
 
 export async function GET() {
   const auth = await requireSession();
@@ -23,26 +24,25 @@ export async function POST(req: NextRequest) {
   const auth = await requireSession("admin");
   if (auth.response) return auth.response;
   const b = await req.json().catch(() => ({}));
-  const required = ["name", "metaAdAccountId", "metaPageId", "metaAccessToken"];
-  for (const f of required) {
-    if (!b[f]?.toString().trim()) {
-      return NextResponse.json({ error: `Missing required field: ${f}` }, { status: 422 });
-    }
-  }
+
+  const result = validateClientFields(b, "create");
+  if ("error" in result) return NextResponse.json({ error: result.error }, { status: 422 });
+  const v = result.values;
+
   const client = await prisma.client.create({
     data: {
-      name: b.name,
-      contactEmail: b.contactEmail || null,
-      website: b.website || null,
-      socialLinksJson: JSON.stringify((b.socialLinks ?? []).filter(Boolean)),
-      gmbUrl: b.gmbUrl || null,
-      metaAdAccountId: String(b.metaAdAccountId).replace(/^act_/, ""),
-      metaPageId: String(b.metaPageId),
-      metaSystemUserId: b.metaSystemUserId || null,
-      metaSystemUserName: b.metaSystemUserName || null,
-      metaAppId: b.metaAppId || null,
-      metaAccessToken: b.metaAccessToken,
-      metaAppToken: b.metaAppToken || null,
+      name: v.name!,
+      contactEmail: v.contactEmail ?? null,
+      website: v.website ?? null,
+      socialLinksJson: JSON.stringify(v.socialLinks ?? []),
+      gmbUrl: v.gmbUrl ?? null,
+      metaAdAccountId: v.metaAdAccountId!,
+      metaPageId: v.metaPageId!,
+      metaSystemUserId: v.metaSystemUserId ?? null,
+      metaSystemUserName: v.metaSystemUserName ?? null,
+      metaAppId: v.metaAppId ?? null,
+      metaAccessToken: v.metaAccessToken!,
+      metaAppToken: v.metaAppToken ?? null,
     },
   });
   return NextResponse.json({ clientId: client.id });

@@ -6,8 +6,7 @@ import { AlertBanner } from "./components/AlertBanner";
 import { CapacityBar } from "./components/CapacityBar";
 import { Icon } from "./components/Icon";
 import { getCapacitySnapshot } from "@/lib/capacity";
-import { getCoachTips } from "@/lib/coach";
-import { getSession, campaignScope, clientScope } from "@/lib/auth";
+import { getSession, campaignScope } from "@/lib/auth";
 import { redirect } from "next/navigation";
 
 // Stagger helper: sets the --i custom prop the .rise-in keyframe reads.
@@ -44,7 +43,7 @@ export default async function Dashboard() {
   if (!session) redirect("/login");
   const admin = session.role === "admin";
 
-  const [campaigns, alerts, capacity, coachTips] = await Promise.all([
+  const [campaigns, alerts, capacity] = await Promise.all([
     prisma.campaign.findMany({
       where: campaignScope(session),
       orderBy: { createdAt: "desc" },
@@ -61,7 +60,6 @@ export default async function Dashboard() {
       take: 10,
     }),
     admin ? getCapacitySnapshot() : Promise.resolve(null),
-    getCoachTips(clientScope(session)),
   ]);
 
   const latest = campaigns.map((c) => c.snapshots[0]).filter(Boolean);
@@ -158,58 +156,6 @@ export default async function Dashboard() {
                 : "Approaching a free-tier limit — worth watching before onboarding more clients."}
             </p>
           )}
-        </section>
-      )}
-
-      {/* Promoter's Coach — the Co-Pilot voice (coral wash block) teaching a
-          non-expert operator what a senior promoter would check today. Rule-
-          based (lib/coach.ts): profile depth, directive hygiene, performance
-          vs 2026 events-industry benchmarks. */}
-      {coachTips.length > 0 && (
-        <section
-          className="rise-in rounded-[var(--radius-lg)] p-5"
-          style={stagger(2, { background: "var(--accent-wash)", border: "1px solid var(--accent-ring)" })}
-        >
-          <div className="mb-1 flex items-center gap-2" style={{ color: "var(--accent)" }}>
-            <Icon name="compass" size="1.15rem" />
-            <h2 className="font-display text-base font-semibold" style={{ color: "var(--ink-primary)" }}>
-              Promoter&apos;s Coach
-            </h2>
-          </div>
-          <p className="mb-4 text-xs" style={{ color: "var(--ink-tertiary)" }}>
-            What a senior events promoter would look at today — and what your co-pilot can&apos;t see without you.
-          </p>
-          <div className="grid gap-3 md:grid-cols-2">
-            {coachTips.map((tip, i) => (
-              <Link
-                key={i}
-                href={tip.href}
-                className="rise-in lift group flex flex-col rounded-[var(--radius-md)] p-4"
-                style={stagger(i + 3, { background: "var(--surface-1)", border: "1px solid var(--line-subtle)" })}
-              >
-                <div className="mb-1.5 flex items-center gap-2">
-                  <span
-                    className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
-                    style={
-                      tip.severity === "act"
-                        ? { background: "var(--warning-wash)", color: "var(--warning)" }
-                        : { background: "var(--surface-3)", color: "var(--ink-tertiary)" }
-                    }
-                  >
-                    {tip.severity === "act" ? "Act on this" : "Worth considering"}
-                  </span>
-                  {tip.clientName && (
-                    <span className="text-[11px]" style={{ color: "var(--ink-muted)" }}>{tip.clientName}</span>
-                  )}
-                </div>
-                <h3 className="flex items-center gap-1.5 text-sm font-semibold" style={{ color: "var(--ink-primary)" }}>
-                  {tip.title}
-                  <Icon name="arrow-right" size="0.85rem" className="icon-nudge" style={{ color: "var(--accent)" }} />
-                </h3>
-                <p className="mt-1 text-xs leading-relaxed" style={{ color: "var(--ink-secondary)" }}>{tip.body}</p>
-              </Link>
-            ))}
-          </div>
         </section>
       )}
 

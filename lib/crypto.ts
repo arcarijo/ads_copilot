@@ -39,7 +39,9 @@ export function encryptSecret(plain: string): string {
     return plain;
   }
   const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", k, iv);
+  // Pin the GCM auth-tag length to 16 bytes so decryption rejects any
+  // truncated/forged tag rather than accepting a weaker one.
+  const cipher = createCipheriv("aes-256-gcm", k, iv, { authTagLength: 16 });
   const ct = Buffer.concat([cipher.update(plain, "utf8"), cipher.final(), cipher.getAuthTag()]);
   return `${PREFIX}${iv.toString("base64")}:${ct.toString("base64")}`;
 }
@@ -54,7 +56,7 @@ export function decryptSecret(stored: string): string {
   const blob = Buffer.from(ctB64, "base64");
   const tag = blob.subarray(blob.length - 16);
   const ct = blob.subarray(0, blob.length - 16);
-  const decipher = createDecipheriv("aes-256-gcm", k, iv);
+  const decipher = createDecipheriv("aes-256-gcm", k, iv, { authTagLength: 16 });
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
 }
