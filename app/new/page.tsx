@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CopilotPlan, CreativeInput } from "@/lib/types";
 
@@ -9,6 +9,12 @@ interface ClientOption {
   name: string;
   status: string;
 }
+
+interface LocationRow {
+  name: string;
+  radiusKm: number;
+}
+const MAX_RADIUS_KM = 80; // Meta's custom-location ceiling
 
 type Step = 1 | 2 | 3 | 4;
 type Phase = "FORM" | "CLARIFY" | "RECEIPT" | "LAUNCHING";
@@ -60,7 +66,10 @@ export default function NewCampaign() {
         const aud = (sections.audiences ?? "").trim();
         const geo = (sections.geography ?? "").trim();
         if (aud) { setTargetAudience((v) => (v.trim() ? v : aud)); filled.push("audience"); }
-        if (geo) { setGeography((v) => (v.trim() ? v : geo)); filled.push("geography"); }
+        if (geo) {
+          setLocations((locs) => (locs.length === 1 && !locs[0].name.trim() ? [{ name: geo, radiusKm: locs[0].radiusKm }] : locs));
+          filled.push("location");
+        }
         setPrefillNote(filled.length ? `Pre-filled ${filled.join(" & ")} from this client's strategy profile — edit freely.` : null);
       })
       .catch(() => {});
@@ -71,12 +80,31 @@ export default function NewCampaign() {
   const [goal, setGoal] = useState("Booking inquiries");
   const [landingPageUrl, setLandingPageUrl] = useState("");
   const [targetAudience, setTargetAudience] = useState("");
-  const [geography, setGeography] = useState("");
+  const [locations, setLocations] = useState<LocationRow[]>([{ name: "", radiusKm: 15 }]);
+  const [ageMin, setAgeMin] = useState("");
+  const [ageMax, setAgeMax] = useState("");
+  const [gender, setGender] = useState<"ALL" | "MALE" | "FEMALE">("ALL");
+  const [checking, setChecking] = useState(false);
+  const [checkResult, setCheckResult] = useState<{ score: number; verdict: string; gaps: string[]; suggestions: string[] } | null>(null);
   const [budgetDollars, setBudgetDollars] = useState(250);
   const [budgetType, setBudgetType] = useState<"DAILY" | "LIFETIME">("LIFETIME");
   const [durationDays, setDurationDays] = useState(14);
   const [abTest, setAbTest] = useState(false);
   const [abVariable, setAbVariable] = useState<"CREATIVE" | "AUDIENCE">("CREATIVE");
+  const [abNotes, setAbNotes] = useState("");
+  const [campaignDirective, setCampaignDirective] = useState("");
+
+  // Daily optimizer runs at 09:00 UTC (vercel.json cron). Show it in the
+  // viewer's local time so they know their deadline to set directives.
+  const localCheckTime = useMemo(() => {
+    try {
+      const d = new Date();
+      d.setUTCHours(9, 0, 0, 0);
+      return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+    } catch {
+      return "";
+    }
+  }, []);
   const [creatives, setCreatives] = useState<CreativeInput[]>([
     { kind: "IMAGE", label: "Creative A", filePaths: [""], primaryText: "", headline: "", linkUrl: "" },
   ]);
@@ -93,6 +121,16 @@ export default function NewCampaign() {
   const [preflight, setPreflight] = useState<PreflightResult | null>(null);
   const [preflightBusy, setPreflightBusy] = useState(false);
 
+  function updateLocation(i: number, patch: Partial<LocationRow>) {
+    setLocations((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+  }
+  function addLocation() {
+    setLocations((ls) => (ls.length < 10 ? [...ls, { name: "", radiusKm: 15 }] : ls));
+  }
+  function removeLocation(i: number) {
+    setLocations((ls) => (ls.length > 1 ? ls.filter((_, j) => j !== i) : ls));
+  }
+
   function updateCreative(i: number, patch: Partial<CreativeInput>) {
     setCreatives((cs) => cs.map((c, j) => (j === i ? { ...c, ...patch } : c)));
   }
@@ -102,6 +140,32 @@ export default function NewCampaign() {
       ...cs,
       { kind: "IMAGE", label: `Creative ${String.fromCharCode(65 + cs.length)}`, filePaths: [""], primaryText: "", headline: "", linkUrl: "" },
     ]);
+  }
+
+  function buildTargeting() {
+    return {
+      locations: locations.map((l) => ({ name: l.name.trim(), radiusKm: l.radiusKm })).filter((l) => l.name),
+      ageMin: ageMin === "" ? undefined : Number(ageMin),
+      ageMax: ageMax === "" ? undefined : Number(ageMax),
+      gender,
+    };
+  }
+
+  async function checkTargeting() {
+    setChecking(true);
+    setCheckResult(null);
+    try {
+      const res = await fetch("/api/campaigns/check-targeting", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ goal, targetAudience, targeting: buildTargeting() }),
+      });
+      const json = await res.json();
+      setCheckResult(json.error ? { score: 0, verdict: json.error, gaps: [], suggestions: [] } : json);
+    } catch {
+      setCheckResult({ score: 0, verdict: "Couldn't run the check. Try again.", gaps: [], suggestions: [] });
+    }
+    setChecking(false);
   }
 
   async function submitToCopilot(clarificationAnswers?: Record<string, string>) {
@@ -117,13 +181,16 @@ export default function NewCampaign() {
         goal,
         landingPageUrl,
         targetAudience,
-        geography,
+        geography: locations.map((l) => `${l.name.trim()} (${l.radiusKm}km)`).filter((s) => s.length > 6).join("; "),
+        targeting: buildTargeting(),
         budgetDollars,
         budgetType,
         durationDays,
         creatives: creatives.map((c) => ({ ...c, filePaths: c.filePaths.filter(Boolean) })),
         abTest,
         abVariable: abTest ? abVariable : undefined,
+        abNotes: abTest ? abNotes : undefined,
+        campaignDirective,
         clarificationAnswers,
       }),
     });
@@ -245,11 +312,131 @@ export default function NewCampaign() {
               <>
                 <div>
                   <label className={labelCls}>Describe your target audience</label>
-                  <textarea className={inputCls} rows={3} value={targetAudience} onChange={(e) => setTargetAudience(e.target.value)} placeholder="Engaged couples 25–40 planning intimate weddings…" />
+                  <textarea
+                    className={inputCls}
+                    rows={4}
+                    value={targetAudience}
+                    onChange={(e) => setTargetAudience(e.target.value)}
+                    placeholder="e.g. Engaged couples aged 25–40 within ~40 min of Hamilton, planning intimate weddings under 80 guests. They value photography, local vendors, and an all-in-one venue."
+                  />
+                  <p className="mt-1 text-xs text-[var(--ink-muted)]">
+                    Your AI Copilot reads this and builds real Meta targeting from it. Be specific — cover <b>who</b> they
+                    are (age, life stage, interests), <b>what they want</b>, and <b>what makes them a good fit</b>. Vague
+                    answers like &ldquo;everyone nearby&rdquo; give the AI little to work with.
+                  </p>
                 </div>
                 <div>
-                  <label className={labelCls}>Where do your customers come from?</label>
-                  <input className={inputCls} value={geography} onChange={(e) => setGeography(e.target.value)} placeholder="Hamilton ON, 15km radius; also Burlington & Oakville" />
+                  <label className={labelCls}>Where should this campaign target?</label>
+                  <p className="mb-2 text-xs text-[var(--ink-muted)]">
+                    Add the cities, neighbourhoods, or addresses this campaign should reach, each with a radius (Meta allows
+                    up to {MAX_RADIUS_KM}km). The app validates and formats these into Meta&rsquo;s location targeting — no guesswork.
+                  </p>
+                  <div className="space-y-2">
+                    {locations.map((loc, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <input
+                          className={`${inputCls} flex-1`}
+                          value={loc.name}
+                          onChange={(e) => updateLocation(i, { name: e.target.value })}
+                          placeholder="City, neighbourhood, or address — e.g. Hamilton, ON"
+                        />
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            min={1}
+                            max={MAX_RADIUS_KM}
+                            className={`${inputCls} w-20`}
+                            value={loc.radiusKm}
+                            onChange={(e) => {
+                              const n = Math.round(Number(e.target.value));
+                              updateLocation(i, { radiusKm: Number.isFinite(n) && n > 0 ? Math.min(MAX_RADIUS_KM, n) : 1 });
+                            }}
+                          />
+                          <span className="text-xs text-[var(--ink-muted)]">km</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeLocation(i)}
+                          disabled={locations.length === 1}
+                          className="rounded-lg border border-[var(--line-standard)] px-2 py-2 text-xs text-[var(--ink-tertiary)] disabled:opacity-30"
+                          aria-label="Remove location"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  {locations.length < 10 && (
+                    <button type="button" onClick={addLocation} className="mt-2 text-sm text-[var(--success)] hover:underline">
+                      + Add another location
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className={labelCls}>
+                      Age range <span className="font-normal text-[var(--ink-muted)]">— optional</span>
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input type="number" min={18} max={65} className={`${inputCls} w-full`} value={ageMin} onChange={(e) => setAgeMin(e.target.value)} placeholder="18" />
+                      <span className="text-xs text-[var(--ink-muted)]">to</span>
+                      <input type="number" min={18} max={65} className={`${inputCls} w-full`} value={ageMax} onChange={(e) => setAgeMax(e.target.value)} placeholder="65" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className={labelCls}>
+                      Gender <span className="font-normal text-[var(--ink-muted)]">— optional</span>
+                    </label>
+                    <select className={inputCls} value={gender} onChange={(e) => setGender(e.target.value as "ALL" | "MALE" | "FEMALE")}>
+                      <option value="ALL">All</option>
+                      <option value="MALE">Men</option>
+                      <option value="FEMALE">Women</option>
+                    </select>
+                  </div>
+                </div>
+                <p className="text-xs text-[var(--ink-muted)]">Leave age/gender blank to let the AI decide from your audience description.</p>
+
+                <div className="rounded-lg border border-[var(--line-subtle)] bg-[var(--surface-2)] p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm font-medium text-[var(--ink-primary)]">Not sure it&rsquo;s enough for Meta?</span>
+                    <button
+                      type="button"
+                      onClick={checkTargeting}
+                      disabled={checking || !targetAudience.trim()}
+                      className="shrink-0 rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold text-black hover:bg-[var(--accent-strong)] disabled:opacity-50"
+                    >
+                      {checking ? "Checking…" : "Check my targeting"}
+                    </button>
+                  </div>
+                  {checkResult && (
+                    <div className="mt-3 space-y-2 text-xs">
+                      <p className="font-medium text-[var(--ink-primary)]">
+                        Readiness: {checkResult.score}/100 —{" "}
+                        <span className="font-normal text-[var(--ink-secondary)]">{checkResult.verdict}</span>
+                      </p>
+                      {checkResult.gaps.length > 0 && (
+                        <div>
+                          <p className="font-medium text-[var(--warning)]">Gaps</p>
+                          <ul className="list-disc pl-5 text-[var(--ink-secondary)]">
+                            {checkResult.gaps.map((g, i) => (
+                              <li key={i}>{g}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {checkResult.suggestions.length > 0 && (
+                        <div>
+                          <p className="font-medium text-[var(--success)]">Suggestions</p>
+                          <ul className="list-disc pl-5 text-[var(--ink-secondary)]">
+                            {checkResult.suggestions.map((s, i) => (
+                              <li key={i}>{s}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </>
             )}
@@ -268,9 +455,20 @@ export default function NewCampaign() {
                   </select>
                 </div>
                 <div>
-                  <label className={labelCls}>Run duration: {durationDays} days</label>
-                  <input type="range" min={7} max={90} step={1} className="w-full" value={durationDays} onChange={(e) => setDurationDays(Number(e.target.value))} />
-                  <div className="flex justify-between text-xs text-[var(--ink-muted)]"><span>1 week</span><span>3 months</span></div>
+                  <label className={labelCls}>Run duration (days)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={90}
+                    step={1}
+                    className={inputCls}
+                    value={durationDays}
+                    onChange={(e) => {
+                      const n = Math.round(Number(e.target.value));
+                      setDurationDays(Number.isFinite(n) && n > 0 ? Math.min(90, n) : 1);
+                    }}
+                  />
+                  <p className="mt-1 text-xs text-[var(--ink-muted)]">How many days this campaign runs (1–90).</p>
                 </div>
               </>
             )}
@@ -289,15 +487,23 @@ export default function NewCampaign() {
                     </div>
                     <div>
                       <label className={labelCls}>
-                        {c.kind === "CAROUSEL" ? "Image file paths (one per line, 2–10)" : c.kind === "VIDEO" ? "Video file path" : "Image file path"}
+                        {c.kind === "CAROUSEL"
+                          ? "Image links (Google Drive or https, one per line, 2–10)"
+                          : c.kind === "VIDEO"
+                            ? "Video — Google Drive share link (or public https URL)"
+                            : "Image — Google Drive share link (or public https URL)"}
                       </label>
                       <textarea
                         className={inputCls}
                         rows={c.kind === "CAROUSEL" ? 3 : 1}
                         value={c.filePaths.join("\n")}
                         onChange={(e) => updateCreative(i, { filePaths: e.target.value.split("\n") })}
-                        placeholder={c.kind === "VIDEO" ? "/assets/venue-tour.mp4" : "/assets/venue-hero.jpg"}
+                        placeholder="https://drive.google.com/file/d/1AbC…/view"
                       />
+                      <p className="mt-1 text-xs text-[var(--ink-muted)]">
+                        Paste the Drive share link and set its sharing to <b>&ldquo;Anyone with the link&rdquo;</b> so Meta can
+                        fetch it at launch — we don&rsquo;t copy or store your media.
+                      </p>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
@@ -334,8 +540,43 @@ export default function NewCampaign() {
                           ⚠️ Only one creative added. A creative split needs 2+. It will launch as a single campaign unless you add another creative above — or turn A/B off.
                         </p>
                       )}
+                      <div className="mt-3">
+                        <label className={labelCls}>What&rsquo;s different between A and B — and what should the AI watch for?</label>
+                        <textarea
+                          className={inputCls}
+                          rows={3}
+                          value={abNotes}
+                          onChange={(e) => setAbNotes(e.target.value)}
+                          placeholder="e.g. A leads with a video venue tour, B with a photo + starting price. Watch which drives more booking inquiries at a lower cost per lead; favour the winner after ~50 conversions."
+                        />
+                        <p className="mt-1 text-xs text-[var(--ink-muted)]">
+                          The Copilot uses this to judge the test each day and lean toward the winner. Editable after launch.
+                        </p>
+                      </div>
                     </div>
                   )}
+                </div>
+
+                {/* Campaign directive + daily-check transparency */}
+                <div className="rounded-lg border border-[var(--line-subtle)] p-4">
+                  <label className={labelCls}>
+                    Campaign directive <span className="font-normal text-[var(--ink-muted)]">— optional</span>
+                  </label>
+                  <textarea
+                    className={inputCls}
+                    rows={3}
+                    value={campaignDirective}
+                    onChange={(e) => setCampaignDirective(e.target.value)}
+                    placeholder="e.g. Prioritise weekday corporate bookings over weekend weddings for this campaign; keep spend flat; favour the video creative."
+                  />
+                  <p className="mt-1 text-xs text-[var(--ink-muted)]">
+                    Context and goals specific to <b>this campaign</b> — separate from your business-wide Manager Directive.
+                    The AI weighs it first every day, and you can edit it after launch.
+                  </p>
+                  <p className="mt-2 rounded-lg bg-[var(--surface-2)] px-3 py-2 text-xs text-[var(--ink-secondary)]">
+                    ⏱️ The AI reviews and optimizes daily at <b>9:00&nbsp;AM UTC</b>
+                    {localCheckTime ? ` (${localCheckTime} your time)` : ""}. Set or update directives before then to steer the next check.
+                  </p>
                 </div>
               </>
             )}
@@ -400,7 +641,8 @@ export default function NewCampaign() {
           </div>
           <p className="text-xs text-[var(--ink-muted)]">
             This budget becomes a database-enforced ceiling. The daily optimizer can pause underperformers but can never
-            raise spend without your emailed approval.
+            raise spend without your emailed approval. It reviews this campaign daily at <b>9:00&nbsp;AM UTC</b>
+            {localCheckTime ? ` (${localCheckTime} your time)` : ""}.
           </p>
 
           {/* Preflight validation gate */}

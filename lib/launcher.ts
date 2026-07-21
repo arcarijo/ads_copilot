@@ -8,7 +8,9 @@ import {
   envCreds,
   MetaCreds,
   setEntityStatus,
+  uploadVideoFromUrl,
 } from "./meta";
+import { normalizeMediaUrl, looksLikeUrl } from "./drive";
 import { assertBudgetAllowed } from "./guardrails";
 import {
   CopilotPlan,
@@ -93,6 +95,22 @@ export async function launchToMeta(campaignId: string): Promise<void> {
 
   const creds = record.client ? credsFromClient(record.client) : envCreds();
   const pageId = creds.pageId ?? process.env.META_PAGE_ID ?? "PAGE_ID_NOT_SET";
+
+  // Resolve creative media without storing bytes: upload Drive/URL videos to
+  // Meta (→ video_id, Meta hosts it) and normalize image links to fetchable
+  // URLs. Already-uploaded video ids (non-URL) pass through untouched.
+  for (const c of creatives) {
+    if (c.kind === "VIDEO") {
+      const src = c.filePaths[0];
+      if (src && looksLikeUrl(src)) {
+        const norm = normalizeMediaUrl(src);
+        if (!norm) throw new Error(`Creative "${c.label}": that video link isn't a valid Google Drive share link or https URL.`);
+        c.filePaths[0] = await uploadVideoFromUrl(creds, norm.url);
+      }
+    } else {
+      c.filePaths = c.filePaths.map((p) => normalizeMediaUrl(p)?.url ?? p);
+    }
+  }
 
   // HARD GUARDRAIL: compare against the DB-enforced ceiling written at approval.
   assertBudgetAllowed(plan.campaign.budgetCents, plan.campaign.budgetType, record.budgetCeilingCents);

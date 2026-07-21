@@ -129,6 +129,12 @@ export async function optimizeCampaign(campaignId: string): Promise<{ executed: 
       daysLive: campaign.startTime ? Math.floor((Date.now() - campaign.startTime.getTime()) / 86_400_000) : 0,
       metaCampaignId: campaign.metaCampaignId,
     }),
+    campaign.directive?.trim()
+      ? `=== THIS CAMPAIGN'S DIRECTIVE (highest priority — a human set this${campaign.directiveAt ? ` on ${campaign.directiveAt.toISOString().slice(0, 10)}` : ""}; honor it before general heuristics) ===\n${campaign.directive.trim()}`
+      : "",
+    campaign.abTest && campaign.abNotes?.trim()
+      ? `=== A/B TEST INTENT (what differs between A and B, and what to watch) ===\n${campaign.abNotes.trim()}`
+      : "",
     "=== YESTERDAY'S PER-AD METRICS ===",
     JSON.stringify(metricsTable, null, 1),
     "=== 7-DAY HISTORY (campaign totals) ===",
@@ -136,7 +142,7 @@ export async function optimizeCampaign(campaignId: string): Promise<{ executed: 
       history.map((h) => ({ date: h.date, spendCents: h.spendCents, ctr: h.ctr, conversions: h.conversions, cpaCents: h.cpaCents }))
     ),
     "Audit and emit your JSON actions now.",
-  ].join("\n\n");
+  ].filter(Boolean).join("\n\n");
 
   let result: OptimizerResult;
   try {
