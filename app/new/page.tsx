@@ -130,7 +130,7 @@ export default function NewCampaign() {
   const [coverageTier, setCoverageTier] = useState<CoverageTier>("CITY_PLUS_NEARBY");
   const [useCorridors, setUseCorridors] = useState(true);
   const [showAdvancedGeo, setShowAdvancedGeo] = useState(false);
-  const [showAdGuide, setShowAdGuide] = useState(true); // step-4 explainer, open by default for first-timers
+  const [showAdGuide, setShowAdGuide] = useState(false); // step-4 explainer, collapsed by default
   const [locations, setLocations] = useState<LocationRow[]>([{ name: "", radiusKm: 15 }]);
   const [ageMin, setAgeMin] = useState("");
   const [ageMax, setAgeMax] = useState("");
@@ -223,7 +223,7 @@ export default function NewCampaign() {
             const kind = c.kind === "CAROUSEL" || c.kind === "VIDEO" ? c.kind : "IMAGE";
             return {
               kind: kind as CreativeInput["kind"],
-              label: typeof c.label === "string" ? c.label : `Creative ${String.fromCharCode(65 + i)}`,
+              label: `Creative ${String.fromCharCode(65 + i)}`, // auto-assigned by position, not user-set
               filePaths: Array.isArray(c.filePaths) ? ((c.filePaths as unknown[]).filter((x) => typeof x === "string") as string[]) : [""],
               primaryText: typeof c.primaryText === "string" ? c.primaryText : "",
               headline: typeof c.headline === "string" ? c.headline : "",
@@ -272,16 +272,24 @@ export default function NewCampaign() {
     setCreatives((cs) => cs.map((c, j) => (j === i ? { ...c, ...patch } : c)));
   }
 
+  // Labels are auto-assigned by position (Creative A, B, C…) and never user-set —
+  // they're just stable, unique identifiers the copilot/launcher use to match
+  // ads to creatives. Relabel on every add/remove so display and stored value
+  // always agree and stay unique.
+  function relabel(cs: CreativeInput[]): CreativeInput[] {
+    return cs.map((c, i) => ({ ...c, label: `Creative ${String.fromCharCode(65 + i)}` }));
+  }
+
   function addCreative() {
     setCreatives((cs) =>
       cs.length < 10
-        ? [...cs, { kind: "IMAGE", label: `Creative ${String.fromCharCode(65 + cs.length)}`, filePaths: [""], primaryText: "", headline: "", linkUrl: "" }]
+        ? relabel([...cs, { kind: "IMAGE", label: "", filePaths: [""], primaryText: "", headline: "", linkUrl: "" }])
         : cs,
     );
   }
 
   function removeCreative(i: number) {
-    setCreatives((cs) => (cs.length > 1 ? cs.filter((_, j) => j !== i) : cs));
+    setCreatives((cs) => (cs.length > 1 ? relabel(cs.filter((_, j) => j !== i)) : cs));
   }
 
   // Resolve the coverage ladder → concrete Meta locations + strategy hints.
@@ -289,6 +297,14 @@ export default function NewCampaign() {
     () => resolveCoverage(hostCity, coverageTier, useCorridors),
     [hostCity, coverageTier, useCorridors],
   );
+
+  // Live validity of the (optional) landing URL — empty is fine, otherwise it
+  // must be a parseable https URL, matching the server's safeUrl() boundary.
+  const landingUrlValid = useMemo(() => {
+    const v = landingPageUrl.trim();
+    if (!v) return true;
+    try { return new URL(v).protocol === "https:"; } catch { return false; }
+  }, [landingPageUrl]);
 
   function buildTargeting() {
     const manual = locations.map((l) => ({ name: l.name.trim(), radiusKm: l.radiusKm })).filter((l) => l.name);
@@ -406,7 +422,7 @@ export default function NewCampaign() {
   const steps = ["Basics", "Audience", "Budget & Schedule", "Creatives & A/B"];
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className={`mx-auto ${phase === "FORM" && step === 4 ? "max-w-4xl" : "max-w-2xl"} space-y-6`}>
       <h1 className="text-2xl font-semibold">New Campaign</h1>
 
       {error && (
@@ -519,7 +535,21 @@ export default function NewCampaign() {
                 </div>
                 <div>
                   <label className={labelCls}>Landing page URL</label>
-                  <input className={inputCls} value={landingPageUrl} onChange={(e) => setLandingPageUrl(e.target.value)} placeholder="https://yourvenue.com/book" />
+                  <input
+                    className={inputCls}
+                    style={landingPageUrl.trim() ? { borderColor: landingUrlValid ? "var(--success)" : "var(--warning)" } : undefined}
+                    value={landingPageUrl}
+                    onChange={(e) => setLandingPageUrl(e.target.value)}
+                    placeholder="https://yourvenue.com/book"
+                    inputMode="url"
+                  />
+                  {landingPageUrl.trim() && (
+                    <p className={`mt-1 text-xs ${landingUrlValid ? "text-[var(--success)]" : "text-[var(--warning)]"}`}>
+                      {landingUrlValid
+                        ? "✓ Valid link — this is where your ad clicks will go."
+                        : "⚠️ That doesn't look like a full web address. Include https:// (e.g. https://yourvenue.com/book)."}
+                    </p>
+                  )}
                 </div>
               </>
             )}
@@ -561,6 +591,9 @@ export default function NewCampaign() {
                       <option key={c.name} value={`${c.name}, ON`} />
                     ))}
                   </datalist>
+                  <p className="mt-1 text-xs text-[var(--ink-muted)]">
+                    Type any city — the suggestions are common Ontario locations, but you can enter any place your event or studio is.
+                  </p>
 
                   <label className="mb-1 mt-3 block text-xs font-medium text-[var(--ink-tertiary)]">How far should this reach?</label>
                   <div className="space-y-1.5">
@@ -757,6 +790,29 @@ export default function NewCampaign() {
 
             {step === 4 && (
               <>
+                {/* Retroactive intent switch — let the user pivot their goal here
+                    without going back to the Basics step. */}
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--line-subtle)] bg-[var(--surface-2)] px-3 py-2">
+                  <label htmlFor="intent-switch" className="text-xs font-medium text-[var(--ink-secondary)]">
+                    Campaign goal — change your mind? Pivot anytime:
+                  </label>
+                  <select
+                    id="intent-switch"
+                    className="rounded-lg border border-[var(--line-standard)] bg-[var(--surface-1)] px-2 py-1 text-xs"
+                    value={campaignIntent}
+                    onChange={(e) => {
+                      const v = e.target.value as CampaignIntent | "";
+                      setCampaignIntent(v);
+                      if (v) setGoal(INTENT_DEFS[v].suggestedGoal);
+                    }}
+                  >
+                    <option value="">— pick a goal —</option>
+                    {CAMPAIGN_INTENTS.map((k) => (
+                      <option key={k} value={k}>{INTENT_DEFS[k].icon} {INTENT_DEFS[k].label}</option>
+                    ))}
+                  </select>
+                </div>
+
                 {/* Intent-driven coaching: recommend rotation vs A/B for the
                     owner's stated goal, and offer a one-click fix on conflict. */}
                 {campaignIntent && (() => {
@@ -891,6 +947,12 @@ export default function NewCampaign() {
                   )}
                 </div>
 
+                <p className="text-xs text-[var(--ink-secondary)]">
+                  <b>Why add more than one?</b> Each creative becomes its own ad. Add several to let Meta rotate them and
+                  automatically favour the best performer — or turn on A/B above to formally test two against each other.
+                  One strong ad is enough to launch.
+                </p>
+                <div className="grid gap-4 lg:grid-cols-2">
                 {creatives.map((c, i) => {
                   const ks = KIND_STYLE[c.kind];
                   return (
@@ -898,7 +960,7 @@ export default function NewCampaign() {
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
                         <span className="rounded-full px-2 py-0.5 text-xs font-semibold" style={{ background: ks.accent, color: "#1a0f08" }}>{ks.label}</span>
-                        <input className={`${inputCls} max-w-40 font-medium`} value={c.label} onChange={(e) => updateCreative(i, { label: e.target.value })} />
+                        <span className="text-sm font-semibold text-[var(--ink-primary)]">Creative {String.fromCharCode(65 + i)}</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <select className={`${inputCls} max-w-32`} value={c.kind} onChange={(e) => updateCreative(i, { kind: e.target.value as CreativeInput["kind"] })}>
@@ -991,6 +1053,7 @@ export default function NewCampaign() {
                   </div>
                   );
                 })}
+                </div>
                 {creatives.length < 10 ? (
                   <button
                     type="button"
