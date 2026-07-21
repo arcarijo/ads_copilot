@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import type { CopilotPlan, CreativeInput } from "@/lib/types";
 import { resolveCoverage, corridorsFor, ONTARIO_CITIES, TIER_ORDER, TIER_LABELS, type CoverageTier } from "@/lib/geoOntario";
@@ -130,7 +130,6 @@ export default function NewCampaign() {
   const [coverageTier, setCoverageTier] = useState<CoverageTier>("CITY_PLUS_NEARBY");
   const [useCorridors, setUseCorridors] = useState(true);
   const [showAdvancedGeo, setShowAdvancedGeo] = useState(false);
-  const [showAdGuide, setShowAdGuide] = useState(false); // step-4 explainer, collapsed by default
   const [locations, setLocations] = useState<LocationRow[]>([{ name: "", radiusKm: 15 }]);
   const [ageMin, setAgeMin] = useState("");
   const [ageMax, setAgeMax] = useState("");
@@ -792,7 +791,7 @@ export default function NewCampaign() {
               <>
                 {/* Retroactive intent switch — let the user pivot their goal here
                     without going back to the Basics step. */}
-                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--line-subtle)] bg-[var(--surface-2)] px-3 py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[var(--surface-2)] px-3 py-2">
                   <label htmlFor="intent-switch" className="text-xs font-medium text-[var(--ink-secondary)]">
                     Campaign goal — change your mind? Pivot anytime:
                   </label>
@@ -841,64 +840,36 @@ export default function NewCampaign() {
                   );
                 })()}
 
-                {/* First-timer explainer: how Meta ads are structured, in plain
-                    language. Collapsible so repeat users can skip it. */}
-                <div className="rounded-xl border border-[var(--info)] bg-[var(--info-wash)] p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <h3 className="text-sm font-semibold text-[var(--ink-primary)]">New to Meta ads? Here&rsquo;s how this works</h3>
-                    <button
-                      type="button"
-                      onClick={() => setShowAdGuide((v) => !v)}
-                      className="shrink-0 rounded-lg border border-[var(--line-standard)] px-3 py-1.5 text-xs font-medium text-[var(--ink-secondary)] transition hover:bg-[var(--surface-1)] active:scale-[0.98]"
-                    >
-                      {showAdGuide ? "Hide" : "Show me"}
-                    </button>
-                  </div>
-                  {showAdGuide && (
-                    <div className="mt-3 space-y-3 text-xs text-[var(--ink-secondary)]">
-                      <p>
-                        Think of your campaign like promoting an event. Meta stacks it in three layers — the AI builds the first
-                        two from what you&rsquo;ve already told us; <b>you build the third here</b>:
-                      </p>
-                      <div className="space-y-2">
-                        <div className="rounded-lg bg-[var(--surface-1)] p-3">
-                          <span className="font-semibold text-[var(--ink-primary)]">1. Campaign</span> — your overall goal and total budget.{" "}
-                          <span className="text-[var(--ink-muted)]">(Set on the earlier steps — the &ldquo;why&rdquo; and the money.)</span>
-                        </div>
-                        <div className="rounded-lg bg-[var(--surface-1)] p-3">
-                          <span className="font-semibold text-[var(--ink-primary)]">2. Ad set</span> — <b>who</b> sees it and <b>where</b> your money goes: the
-                          audience, location, and schedule.{" "}
-                          <span className="text-[var(--ink-muted)]">(The AI builds this from your Step 2 audience &amp; location — the &ldquo;who.&rdquo;)</span>
-                        </div>
-                        <div className="rounded-lg bg-[var(--surface-1)] p-3">
-                          <span className="font-semibold text-[var(--accent)]">3. Ads (this step)</span> — <b>what people actually see</b>: your photo or video and the
-                          words. Each &ldquo;creative&rdquo; below becomes one ad.
-                        </div>
-                      </div>
-                      <p className="text-[var(--ink-muted)]">
-                        <b>The short version:</b> add one strong ad and launch. Only add more ads, or turn on split testing, once
-                        you want to <i>learn</i> what works best — the guidance below walks you through both.
-                      </p>
-                    </div>
-                  )}
-                </div>
+                {/* First-timer explainer, tucked behind progressive disclosure so
+                    it never walls off the task for repeat users. */}
+                <Disclosure summary="New to Meta ads? How campaigns, ad sets & ads fit together">
+                  <p>
+                    Think of your campaign like promoting an event — Meta stacks it in three layers. The AI builds the first two
+                    from what you&rsquo;ve already told us; <b>you build the third here</b>:
+                  </p>
+                  <ul className="space-y-1">
+                    <li><b className="text-[var(--ink-primary)]">Campaign</b> — your goal &amp; budget <span className="text-[var(--ink-muted)]">(earlier steps)</span></li>
+                    <li><b className="text-[var(--ink-primary)]">Ad set</b> — <b>who</b> sees it &amp; <b>where</b> the money goes <span className="text-[var(--ink-muted)]">(AI-built from your Step&nbsp;2 audience)</span></li>
+                    <li><b className="text-[var(--accent)]">Ads — this step</b> — <b>what people see</b>: your photo/video and words. Each creative below becomes one ad.</li>
+                  </ul>
+                  <p className="text-[var(--ink-muted)]">
+                    <b>Short version:</b> add one strong ad and launch. Add more, or split-test, only when you want to <i>learn</i> what works.
+                  </p>
+                </Disclosure>
 
-                <div className="rounded-lg border border-[var(--line-subtle)] bg-[var(--surface-2)] p-4">
+                <div className="rounded-lg bg-[var(--surface-2)] p-4">
                   <label className="flex items-center gap-3 text-sm">
                     <input type="checkbox" checked={abTest} onChange={(e) => setAbTest(e.target.checked)} className="h-4 w-4" />
-                    <span className="font-medium">Enable A/B split test at launch</span>
-                    <span className="text-xs text-[var(--ink-muted)]">— optional, for learning what works</span>
+                    <span className="font-medium">Run an A/B split test at launch</span>
+                    <span className="text-xs text-[var(--ink-muted)]">— optional</span>
                   </label>
-                  <p className="mt-1 pl-7 text-xs text-[var(--ink-muted)]">
-                    Leave this off to launch a single, non-split campaign. You can launch with just one creative. A Meta split
-                    test compares exactly <b>two</b> variants — extra creatives beyond that run as additional rotating ads, not test cells.
-                  </p>
+                  {!abTest && (
+                    <p className="mt-1 pl-7 text-xs text-[var(--ink-muted)]">
+                      Off = one campaign; your ads rotate and Meta favours the winner. Turn on to formally test <b>two</b> variants head-to-head.
+                    </p>
+                  )}
                   {abTest && (
                     <div className="mt-3">
-                      <p className="mb-2 text-xs text-[var(--ink-secondary)]">
-                        A split test runs <b>two versions</b> at once, lets Meta learn which performs better, and shifts spend to the
-                        winner. Choose <b>what</b> to compare:
-                      </p>
                       <label className={labelCls}>What do you want to test?</label>
                       <select className={inputCls} value={abVariable} onChange={(e) => setAbVariable(e.target.value as "CREATIVE" | "AUDIENCE")}>
                         <option value="CREATIVE">The ad itself — same audience, two different ads</option>
@@ -947,10 +918,14 @@ export default function NewCampaign() {
                   )}
                 </div>
 
-                <p className="text-xs text-[var(--ink-secondary)]">
-                  <b>Why add more than one?</b> Each creative becomes its own ad. Add several to let Meta rotate them and
-                  automatically favour the best performer — or turn on A/B above to formally test two against each other.
-                  One strong ad is enough to launch.
+                {/* Focal point of the step: the actual ads. A heading + a single
+                    helper line anchors it above the guidance that precedes it. */}
+                <div className="flex items-baseline justify-between gap-3 pt-2">
+                  <h3 className="text-base font-semibold text-[var(--ink-primary)]">Your ads</h3>
+                  <span className="text-xs text-[var(--ink-muted)]">{creatives.length} of 10</span>
+                </div>
+                <p className="-mt-3 text-xs text-[var(--ink-muted)]">
+                  Each creative becomes its own ad. One is enough to launch — add more to let Meta rotate them and favour the winner.
                 </p>
                 <div className="grid gap-4 lg:grid-cols-2">
                 {creatives.map((c, i) => {
@@ -994,11 +969,11 @@ export default function NewCampaign() {
                       )
                     )}
 
-                    {/* Live "when to pick this format" guidance for beginners. */}
-                    <div className="rounded-lg border border-[var(--line-subtle)] bg-[var(--surface-1)] p-3 text-xs">
-                      <p className="text-[var(--ink-secondary)]"><b>{KIND_STYLE[c.kind].label}</b> — {KIND_GUIDE[c.kind].bestFor}</p>
-                      <p className="mt-1 text-[var(--ink-muted)]">💡 {KIND_GUIDE[c.kind].tip} <span className="italic">({KIND_GUIDE[c.kind].effort})</span></p>
-                    </div>
+                    {/* Context helper for the chosen format — one quiet line (no
+                        nested card); the concrete tip is available on hover. */}
+                    <p className="text-xs text-[var(--ink-muted)]" title={KIND_GUIDE[c.kind].tip}>
+                      {KIND_GUIDE[c.kind].bestFor} <span className="text-[var(--ink-tertiary)]">· {KIND_GUIDE[c.kind].effort}</span>
+                    </p>
 
                     <div>
                       <label className={labelCls}>
@@ -1045,9 +1020,8 @@ export default function NewCampaign() {
                         placeholder="e.g. Say “I do” at Hamilton’s all-in-one waterfront venue — intimate weddings up to 80 guests, in-house catering, and a dedicated planner. Now booking spring & summer 2026. Tap to check your date."
                       />
                       <p className="mt-1 text-xs text-[var(--ink-muted)]">
-                        The main body of your ad. Lead with your hook in the <b>first ~125 characters</b> — that&rsquo;s what shows
-                        before Meta&rsquo;s &ldquo;See more&rdquo; cut-off on mobile. Communicate your <b>offer</b>, <b>what makes you
-                        different</b>, and a clear <b>call to action</b>. One to three short sentences almost always beats a wall of text.
+                        Lead with your hook in the <b>first ~125 characters</b> (before Meta&rsquo;s &ldquo;See more&rdquo;). Cover your offer,
+                        what&rsquo;s different, and a clear call to action — a few short sentences beat a wall of text.
                       </p>
                     </div>
                   </div>
@@ -1268,6 +1242,24 @@ function Spinner() {
       className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-black/30 border-t-black"
       aria-hidden
     />
+  );
+}
+
+/**
+ * Progressive-disclosure block. Secondary guidance lives here so the default
+ * view stays scannable instead of stacking paragraphs into a wall. Native
+ * <details> = keyboard- and screen-reader-accessible for free; the summary row
+ * carries the project's hover/press feedback and a chevron that flips on open.
+ */
+function Disclosure({ summary, defaultOpen = false, children }: { summary: string; defaultOpen?: boolean; children: ReactNode }) {
+  return (
+    <details open={defaultOpen} className="group rounded-lg bg-[var(--surface-2)]">
+      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-[var(--ink-secondary)] transition hover:text-[var(--ink-primary)] active:scale-[0.99] [&::-webkit-details-marker]:hidden">
+        <span className="text-[var(--ink-tertiary)] transition-transform group-open:rotate-90" aria-hidden>›</span>
+        {summary}
+      </summary>
+      <div className="space-y-2 px-3 pb-3 pl-7 text-xs leading-relaxed text-[var(--ink-secondary)]">{children}</div>
+    </details>
   );
 }
 
