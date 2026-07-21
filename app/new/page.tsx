@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CopilotPlan, CreativeInput } from "@/lib/types";
+import { resolveCoverage, corridorsFor, ONTARIO_CITIES, TIER_ORDER, TIER_LABELS, type CoverageTier } from "@/lib/geoOntario";
 
 interface ClientOption {
   id: string;
@@ -67,7 +68,7 @@ export default function NewCampaign() {
         const geo = (sections.geography ?? "").trim();
         if (aud) { setTargetAudience((v) => (v.trim() ? v : aud)); filled.push("audience"); }
         if (geo) {
-          setLocations((locs) => (locs.length === 1 && !locs[0].name.trim() ? [{ name: geo, radiusKm: locs[0].radiusKm }] : locs));
+          setHostCity((v) => (v.trim() ? v : geo));
           filled.push("location");
         }
         setPrefillNote(filled.length ? `Pre-filled ${filled.join(" & ")} from this client's strategy profile — edit freely.` : null);
@@ -80,6 +81,11 @@ export default function NewCampaign() {
   const [goal, setGoal] = useState("Booking inquiries");
   const [landingPageUrl, setLandingPageUrl] = useState("");
   const [targetAudience, setTargetAudience] = useState("");
+  // GTA coverage ladder (primary geo UX) + manual rows (collapsed advanced).
+  const [hostCity, setHostCity] = useState("");
+  const [coverageTier, setCoverageTier] = useState<CoverageTier>("CITY_PLUS_NEARBY");
+  const [useCorridors, setUseCorridors] = useState(true);
+  const [showAdvancedGeo, setShowAdvancedGeo] = useState(false);
   const [locations, setLocations] = useState<LocationRow[]>([{ name: "", radiusKm: 15 }]);
   const [ageMin, setAgeMin] = useState("");
   const [ageMax, setAgeMax] = useState("");
@@ -154,9 +160,18 @@ export default function NewCampaign() {
     ]);
   }
 
+  // Resolve the coverage ladder → concrete Meta locations + strategy hints.
+  const coverage = useMemo(
+    () => resolveCoverage(hostCity, coverageTier, useCorridors),
+    [hostCity, coverageTier, useCorridors],
+  );
+
   function buildTargeting() {
+    const manual = locations.map((l) => ({ name: l.name.trim(), radiusKm: l.radiusKm })).filter((l) => l.name);
+    const resolved = coverage.locations.map((l) => ({ name: l.name, radiusKm: l.radiusKm }));
     return {
-      locations: locations.map((l) => ({ name: l.name.trim(), radiusKm: l.radiusKm })).filter((l) => l.name),
+      locations: [...resolved, ...manual],
+      coverageNote: coverage.coverageNote,
       ageMin: ageMin === "" ? undefined : Number(ageMin),
       ageMax: ageMax === "" ? undefined : Number(ageMax),
       gender,
@@ -193,7 +208,7 @@ export default function NewCampaign() {
         goal,
         landingPageUrl,
         targetAudience,
-        geography: locations.map((l) => `${l.name.trim()} (${l.radiusKm}km)`).filter((s) => s.length > 6).join("; "),
+        geography: [coverage.coverageNote, ...locations.map((l) => l.name.trim()).filter(Boolean)].filter(Boolean).join(" | "),
         targeting: buildTargeting(),
         budgetDollars,
         budgetType,
@@ -340,48 +355,114 @@ export default function NewCampaign() {
                 <div>
                   <label className={labelCls}>Where should this campaign target?</label>
                   <p className="mb-2 text-xs text-[var(--ink-muted)]">
-                    Add the cities, neighbourhoods, or addresses this campaign should reach, each with a radius (Meta allows
-                    up to {MAX_RADIUS_KM}km). The app validates and formats these into Meta&rsquo;s location targeting — no guesswork.
+                    Tell us where your event or studio is, then choose how far to reach — we turn that into Meta location
+                    targeting for you.
                   </p>
-                  <div className="space-y-2">
-                    {locations.map((loc, i) => (
-                      <div key={i} className="flex items-center gap-2">
-                        <input
-                          className={`${inputCls} flex-1`}
-                          value={loc.name}
-                          onChange={(e) => updateLocation(i, { name: e.target.value })}
-                          placeholder="City, neighbourhood, or address — e.g. Hamilton, ON"
-                        />
-                        <div className="flex items-center gap-1">
-                          <input
-                            type="number"
-                            min={1}
-                            max={MAX_RADIUS_KM}
-                            className={`${inputCls} w-20`}
-                            value={loc.radiusKm}
-                            onChange={(e) => {
-                              const n = Math.round(Number(e.target.value));
-                              updateLocation(i, { radiusKm: Number.isFinite(n) && n > 0 ? Math.min(MAX_RADIUS_KM, n) : 1 });
-                            }}
-                          />
-                          <span className="text-xs text-[var(--ink-muted)]">km</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => removeLocation(i)}
-                          disabled={locations.length === 1}
-                          className="rounded-lg border border-[var(--line-standard)] px-2 py-2 text-xs text-[var(--ink-tertiary)] disabled:opacity-30"
-                          aria-label="Remove location"
-                        >
-                          ✕
-                        </button>
-                      </div>
+
+                  <label className="mb-1 block text-xs font-medium text-[var(--ink-tertiary)]">Event / studio city</label>
+                  <input
+                    className={inputCls}
+                    list="ontario-cities"
+                    value={hostCity}
+                    onChange={(e) => setHostCity(e.target.value)}
+                    placeholder="e.g. Milton, ON"
+                  />
+                  <datalist id="ontario-cities">
+                    {ONTARIO_CITIES.map((c) => (
+                      <option key={c.name} value={`${c.name}, ON`} />
                     ))}
+                  </datalist>
+
+                  <label className="mb-1 mt-3 block text-xs font-medium text-[var(--ink-tertiary)]">How far should this reach?</label>
+                  <div className="space-y-1.5">
+                    {TIER_ORDER.map((tier) => {
+                      const active = coverageTier === tier;
+                      const cityShort = hostCity.split(",")[0].trim();
+                      return (
+                        <label
+                          key={tier}
+                          className="flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm"
+                          style={{
+                            borderColor: active ? "var(--accent)" : "var(--line-subtle)",
+                            background: active ? "var(--accent-wash)" : "transparent",
+                          }}
+                        >
+                          <input type="radio" name="coverage" checked={active} onChange={() => setCoverageTier(tier)} className="h-3.5 w-3.5" />
+                          <span>{cityShort ? TIER_LABELS[tier].replace("my city", cityShort) : TIER_LABELS[tier]}</span>
+                        </label>
+                      );
+                    })}
                   </div>
-                  {locations.length < 10 && (
-                    <button type="button" onClick={addLocation} className="mt-2 text-sm text-[var(--success)] hover:underline">
-                      + Add another location
-                    </button>
+
+                  {coverageTier === "CITY_PLUS_NEARBY" && corridorsFor(hostCity).length > 0 && (
+                    <label className="mt-2 flex items-center gap-2 text-xs text-[var(--ink-secondary)]">
+                      <input type="checkbox" checked={useCorridors} onChange={(e) => setUseCorridors(e.target.checked)} className="h-3.5 w-3.5" />
+                      Include towns along the {corridorsFor(hostCity).join(" & ")} GO transit corridor
+                    </label>
+                  )}
+
+                  {(coverage.locations.length > 0 || coverage.coverageNote) && (
+                    <p className="mt-2 rounded-lg bg-[var(--surface-2)] px-3 py-2 text-xs text-[var(--ink-secondary)]">
+                      <b>Meta targeting:</b>{" "}
+                      {coverage.locations.length
+                        ? coverage.locations.map((l) => `${l.name} (${l.radiusKm}km)`).join(" · ")
+                        : coverage.coverageNote}
+                    </p>
+                  )}
+
+                  {coverage.hints.map((h, i) => (
+                    <p key={i} className="mt-2 rounded-lg bg-[var(--warning-wash)] px-3 py-2 text-xs text-[var(--warning)]">💡 {h}</p>
+                  ))}
+
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvancedGeo((v) => !v)}
+                    className="mt-3 text-xs text-[var(--ink-tertiary)] hover:underline"
+                  >
+                    {showAdvancedGeo ? "▾ Hide advanced" : "▸ Advanced: add specific cities / addresses"}
+                  </button>
+                  {showAdvancedGeo && (
+                    <div className="mt-2 space-y-2">
+                      <p className="text-xs text-[var(--ink-muted)]">Added on top of your coverage choice above (up to {MAX_RADIUS_KM}km each).</p>
+                      {locations.map((loc, i) => (
+                        <div key={i} className="flex items-center gap-2">
+                          <input
+                            className={`${inputCls} flex-1`}
+                            value={loc.name}
+                            onChange={(e) => updateLocation(i, { name: e.target.value })}
+                            placeholder="City, neighbourhood, or address"
+                          />
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              min={1}
+                              max={MAX_RADIUS_KM}
+                              className={`${inputCls} w-20`}
+                              value={loc.radiusKm}
+                              onChange={(e) => {
+                                const n = Math.round(Number(e.target.value));
+                                updateLocation(i, { radiusKm: Number.isFinite(n) && n > 0 ? Math.min(MAX_RADIUS_KM, n) : 1 });
+                              }}
+                            />
+                            <span className="text-xs text-[var(--ink-muted)]">km</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeLocation(i)}
+                            disabled={locations.length === 1}
+                            className="rounded-lg border border-[var(--line-standard)] px-2 py-2 text-xs text-[var(--ink-tertiary)] disabled:opacity-30"
+                            aria-label="Remove location"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                      {locations.length < 10 && (
+                        <button type="button" onClick={addLocation} className="text-sm text-[var(--success)] hover:underline">
+                          + Add another location
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
 
