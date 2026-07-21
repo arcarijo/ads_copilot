@@ -86,6 +86,7 @@ export default function NewCampaign() {
   const [gender, setGender] = useState<"ALL" | "MALE" | "FEMALE">("ALL");
   const [checking, setChecking] = useState(false);
   const [checkResult, setCheckResult] = useState<{ score: number; verdict: string; gaps: string[]; suggestions: string[] } | null>(null);
+  const [elapsed, setElapsed] = useState(0); // seconds the current AI call has been running
   const [budgetDollars, setBudgetDollars] = useState(250);
   const [budgetType, setBudgetType] = useState<"DAILY" | "LIFETIME">("LIFETIME");
   const [durationDays, setDurationDays] = useState(14);
@@ -120,6 +121,17 @@ export default function NewCampaign() {
   interface PreflightResult { ready: boolean; hasWarnings: boolean; checks: PreflightCheck[] }
   const [preflight, setPreflight] = useState<PreflightResult | null>(null);
   const [preflightBusy, setPreflightBusy] = useState(false);
+
+  // Tick an elapsed-seconds counter while an AI call is in flight, so the long
+  // "Consulting AI Copilot" step shows progress instead of appearing frozen.
+  useEffect(() => {
+    if (!busy) {
+      setElapsed(0);
+      return;
+    }
+    const t = setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => clearInterval(t);
+  }, [busy]);
 
   function updateLocation(i: number, patch: Partial<LocationRow>) {
     setLocations((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
@@ -505,15 +517,25 @@ export default function NewCampaign() {
                         fetch it at launch — we don&rsquo;t copy or store your media.
                       </p>
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className={labelCls}>Headline</label>
-                        <input className={inputCls} value={c.headline ?? ""} onChange={(e) => updateCreative(i, { headline: e.target.value })} />
-                      </div>
-                      <div>
-                        <label className={labelCls}>Primary text</label>
-                        <input className={inputCls} value={c.primaryText ?? ""} onChange={(e) => updateCreative(i, { primaryText: e.target.value })} />
-                      </div>
+                    <div>
+                      <label className={labelCls}>Headline</label>
+                      <input className={inputCls} value={c.headline ?? ""} onChange={(e) => updateCreative(i, { headline: e.target.value })} placeholder="e.g. Book Your 2026 Wedding Date" />
+                      <p className="mt-1 text-xs text-[var(--ink-muted)]">The bold line under your image — short and punchy (~5–7 words).</p>
+                    </div>
+                    <div>
+                      <label className={labelCls}>Primary text</label>
+                      <textarea
+                        className={inputCls}
+                        rows={4}
+                        value={c.primaryText ?? ""}
+                        onChange={(e) => updateCreative(i, { primaryText: e.target.value })}
+                        placeholder="e.g. Say “I do” at Hamilton’s all-in-one waterfront venue — intimate weddings up to 80 guests, in-house catering, and a dedicated planner. Now booking spring & summer 2026. Tap to check your date."
+                      />
+                      <p className="mt-1 text-xs text-[var(--ink-muted)]">
+                        The main body of your ad. Lead with your hook in the <b>first ~125 characters</b> — that&rsquo;s what shows
+                        before Meta&rsquo;s &ldquo;See more&rdquo; cut-off on mobile. Communicate your <b>offer</b>, <b>what makes you
+                        different</b>, and a clear <b>call to action</b>. One to three short sentences almost always beats a wall of text.
+                      </p>
                     </div>
                   </div>
                 ))}
@@ -594,11 +616,16 @@ export default function NewCampaign() {
                   Next
                 </button>
               ) : (
-                <button onClick={() => submitToCopilot()} disabled={busy || !campaignName} className="rounded-lg bg-[var(--accent)] px-5 py-2 text-sm font-semibold text-black hover:bg-[var(--accent-strong)] disabled:opacity-50">
-                  {busy ? "Consulting AI Copilot…" : "Review with AI Copilot →"}
+                <button onClick={() => submitToCopilot()} disabled={busy || !campaignName} className="flex items-center gap-2 rounded-lg bg-[var(--accent)] px-5 py-2 text-sm font-semibold text-black hover:bg-[var(--accent-strong)] disabled:opacity-50">
+                  {busy ? (<><Spinner /> Consulting AI Copilot… {elapsed}s</>) : "Review with AI Copilot →"}
                 </button>
               )}
             </div>
+            {busy && step === 4 && (
+              <p className="pt-2 text-right text-xs text-[var(--ink-muted)]">
+                The AI is analysing your inputs and building a Meta-ready plan — usually 10–30&nbsp;seconds. Please keep this tab open.
+              </p>
+            )}
           </div>
         </>
       )}
@@ -615,16 +642,25 @@ export default function NewCampaign() {
           <button
             onClick={() => submitToCopilot(answers)}
             disabled={busy || questions.some((q) => !answers[q]?.trim())}
-            className="rounded-lg bg-[var(--accent)] px-5 py-2 text-sm font-semibold text-black hover:bg-[var(--accent-strong)] disabled:opacity-50"
+            className="flex items-center gap-2 rounded-lg bg-[var(--accent)] px-5 py-2 text-sm font-semibold text-black hover:bg-[var(--accent-strong)] disabled:opacity-50"
           >
-            {busy ? "Re-planning…" : "Submit answers"}
+            {busy ? (<><Spinner /> Re-planning… {elapsed}s</>) : "Submit answers"}
           </button>
         </div>
       )}
 
       {(phase === "RECEIPT" || phase === "LAUNCHING") && plan && (
         <div className="space-y-5 rounded-xl border border-[var(--line-subtle)] bg-[var(--surface-1)] p-6">
-          <h2 className="text-lg font-semibold">📋 Campaign Receipt — review before launch</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold">📋 Pre-Launch Review — confirm before you launch</h2>
+            <button
+              onClick={() => { setPhase("FORM"); setStep(4); }}
+              disabled={phase === "LAUNCHING"}
+              className="rounded-lg border border-[var(--line-standard)] px-3 py-1.5 text-sm text-[var(--ink-secondary)] hover:bg-[var(--surface-2)] disabled:opacity-30"
+            >
+              ← Back to edit
+            </button>
+          </div>
           <table className="w-full text-sm">
             <tbody className="[&_td]:py-1.5">
               <tr><td className="w-40 text-[var(--ink-tertiary)]">Campaign</td><td className="font-medium">{plan.campaign.name}</td></tr>
@@ -683,5 +719,15 @@ export default function NewCampaign() {
         </div>
       )}
     </div>
+  );
+}
+
+/** Small indeterminate spinner for in-flight AI calls (unknown duration). */
+function Spinner() {
+  return (
+    <span
+      className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-black/30 border-t-black"
+      aria-hidden
+    />
   );
 }
