@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CopilotPlan, CreativeInput } from "@/lib/types";
 import { resolveCoverage, corridorsFor, ONTARIO_CITIES, TIER_ORDER, TIER_LABELS, type CoverageTier } from "@/lib/geoOntario";
@@ -36,6 +36,7 @@ export default function NewCampaign() {
   const [clientId, setClientId] = useState("");
   const [prefillNote, setPrefillNote] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(true);
+  const [userId, setUserId] = useState<string | null>(null);
   useEffect(() => {
     fetch("/api/clients")
       .then((r) => r.json())
@@ -48,9 +49,22 @@ export default function NewCampaign() {
       .catch(() => {});
     fetch("/api/me")
       .then((r) => r.json())
-      .then((j) => setIsAdmin(j.role === "admin"))
+      .then((j) => {
+        setIsAdmin(j.role === "admin");
+        if (typeof j.userId === "string") setUserId(j.userId);
+      })
       .catch(() => {});
   }, []);
+
+  // Draft autosave (localStorage, per user). Keeps the form from being lost on
+  // refresh/close. The draft never touches the server — it repopulates the form,
+  // which is fully re-sanitized server-side on submit — so it adds no new
+  // server attack surface.
+  const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
+  const [draftRestoreDone, setDraftRestoreDone] = useState(false); // gates autosave until any existing draft is read
+  const [hadSavedDraft, setHadSavedDraft] = useState(false); // whether a draft was actually restored (for the note)
+  const draftKey = userId ? `adscopilot:new-campaign-draft:v1:${userId}` : null;
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // When a client is chosen, pre-fill audience & geography from their strategy
   // profile — the profile is ongoing ground truth. Never clobber typed input.
@@ -141,6 +155,76 @@ export default function NewCampaign() {
     const t = setInterval(() => setElapsed((e) => e + 1), 1000);
     return () => clearInterval(t);
   }, [busy]);
+
+  // Restore a saved draft once, as soon as we know which user this is. Shapes
+  // from storage are defensively coerced so a tampered/corrupt draft can only
+  // repopulate the form (never crash it), and everything is re-validated
+  // server-side on submit.
+  useEffect(() => {
+    if (!draftKey || draftRestoreDone) return;
+    try {
+      const raw = localStorage.getItem(draftKey);
+      if (raw) {
+        const d = JSON.parse(raw) as Record<string, unknown>;
+        const s = (k: string, set: (v: string) => void) => { if (typeof d[k] === "string") set(d[k] as string); };
+        s("campaignName", setCampaignName); s("goal", setGoal); s("landingPageUrl", setLandingPageUrl);
+        s("clientId", setClientId); s("targetAudience", setTargetAudience); s("hostCity", setHostCity);
+        s("ageMin", setAgeMin); s("ageMax", setAgeMax); s("abNotes", setAbNotes); s("campaignDirective", setCampaignDirective);
+        if (typeof d.coverageTier === "string") setCoverageTier(d.coverageTier as CoverageTier);
+        if (typeof d.useCorridors === "boolean") setUseCorridors(d.useCorridors as boolean);
+        if (d.gender === "MALE" || d.gender === "FEMALE" || d.gender === "ALL") setGender(d.gender);
+        if (typeof d.budgetDollars === "number") setBudgetDollars(d.budgetDollars as number);
+        if (d.budgetType === "DAILY" || d.budgetType === "LIFETIME") setBudgetType(d.budgetType);
+        if (typeof d.durationDays === "number") setDurationDays(d.durationDays as number);
+        if (typeof d.abTest === "boolean") setAbTest(d.abTest as boolean);
+        if (d.abVariable === "CREATIVE" || d.abVariable === "AUDIENCE") setAbVariable(d.abVariable);
+        if (Array.isArray(d.locations)) {
+          setLocations((d.locations as unknown[]).slice(0, 10).map((rw) => {
+            const l = (rw ?? {}) as Record<string, unknown>;
+            const r = Math.round(Number(l.radiusKm));
+            return { name: typeof l.name === "string" ? l.name : "", radiusKm: Number.isFinite(r) ? Math.min(80, Math.max(1, r)) : 15 };
+          }));
+        }
+        if (Array.isArray(d.creatives)) {
+          setCreatives((d.creatives as unknown[]).slice(0, 10).map((rw, i) => {
+            const c = (rw ?? {}) as Record<string, unknown>;
+            const kind = c.kind === "CAROUSEL" || c.kind === "VIDEO" ? c.kind : "IMAGE";
+            return {
+              kind: kind as CreativeInput["kind"],
+              label: typeof c.label === "string" ? c.label : `Creative ${String.fromCharCode(65 + i)}`,
+              filePaths: Array.isArray(c.filePaths) ? ((c.filePaths as unknown[]).filter((x) => typeof x === "string") as string[]) : [""],
+              primaryText: typeof c.primaryText === "string" ? c.primaryText : "",
+              headline: typeof c.headline === "string" ? c.headline : "",
+              linkUrl: typeof c.linkUrl === "string" ? c.linkUrl : "",
+            };
+          }));
+        }
+        setHadSavedDraft(true);
+      }
+    } catch {
+      /* corrupt draft — ignore and start fresh */
+    }
+    setDraftRestoreDone(true);
+  }, [draftKey, draftRestoreDone]);
+
+  // Autosave the form (debounced) once any existing draft has been read.
+  useEffect(() => {
+    if (!draftKey || !draftRestoreDone || phase !== "FORM") return;
+    const snapshot = { campaignName, goal, landingPageUrl, clientId, targetAudience, hostCity, coverageTier, useCorridors, locations, ageMin, ageMax, gender, budgetDollars, budgetType, durationDays, creatives, abTest, abVariable, abNotes, campaignDirective };
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      try { localStorage.setItem(draftKey, JSON.stringify(snapshot)); setDraftSavedAt(Date.now()); } catch { /* quota — ignore */ }
+    }, 600);
+    return () => clearTimeout(saveTimer.current);
+  }, [draftKey, draftRestoreDone, phase, campaignName, goal, landingPageUrl, clientId, targetAudience, hostCity, coverageTier, useCorridors, locations, ageMin, ageMax, gender, budgetDollars, budgetType, durationDays, creatives, abTest, abVariable, abNotes, campaignDirective]);
+
+  function clearDraft() {
+    if (draftKey) {
+      try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
+    }
+    setDraftSavedAt(null);
+    setHadSavedDraft(false);
+  }
 
   function updateLocation(i: number, patch: Partial<LocationRow>) {
     setLocations((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
@@ -277,6 +361,7 @@ export default function NewCampaign() {
       setPhase("RECEIPT");
       return;
     }
+    clearDraft(); // campaign launched — the draft is no longer needed
     router.push(`/campaigns/${campaignId}`);
   }
 
@@ -302,6 +387,24 @@ export default function NewCampaign() {
               </li>
             ))}
           </ol>
+
+          <div className="flex items-center justify-between gap-3 text-xs">
+            <span className="text-[var(--ink-muted)]">
+              {hadSavedDraft && <span className="text-[var(--success)]">↩ Restored your saved draft. </span>}
+              {draftSavedAt
+                ? "✓ Progress saved automatically — safe to refresh or come back later."
+                : "Your progress saves automatically as you go."}
+            </span>
+            {(draftSavedAt || hadSavedDraft) && (
+              <button
+                type="button"
+                onClick={() => { clearDraft(); window.location.reload(); }}
+                className="shrink-0 text-[var(--ink-tertiary)] hover:underline"
+              >
+                Start over
+              </button>
+            )}
+          </div>
 
           <div className="space-y-4 rounded-xl border border-[var(--line-subtle)] bg-[var(--surface-1)] p-6">
             {step === 1 && (
