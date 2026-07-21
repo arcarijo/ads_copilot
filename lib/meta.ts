@@ -129,6 +129,19 @@ export async function createAdCreative(creds: MetaCreds, payload: MetaCreativePa
   return res.id;
 }
 
+/**
+ * Upload a video to Meta by URL (e.g. a normalized Google Drive direct link).
+ * Meta fetches and hosts it; we store nothing. Returns the Meta video id.
+ * Note: Meta processes video async — the id is usable for creative creation,
+ * but very large files may still be transcoding briefly after this returns.
+ */
+export async function uploadVideoFromUrl(creds: MetaCreds, fileUrl: string): Promise<string> {
+  const res = await metaFetch<{ id: string }>(creds, `act_${creds.accountId}/advideos`, {
+    body: { file_url: fileUrl },
+  });
+  return res.id;
+}
+
 export async function createAd(creds: MetaCreds, payload: MetaAdPayload): Promise<string> {
   const res = await metaFetch<{ id: string }>(creds, `act_${creds.accountId}/ads`, { body: { ...payload } });
   return res.id;

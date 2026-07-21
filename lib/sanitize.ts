@@ -78,6 +78,102 @@ export function safeToken(v: unknown, maxLen = 1024): string | null {
   return /^[A-Za-z0-9._\-|~]+$/.test(s) ? s : null;
 }
 
+// ---------------- Campaign input sanitization ----------------
+// The New Campaign form collects a lot of free text + URLs. This is the
+// server-side trust boundary for that surface: every value is length-bounded,
+// control-char stripped, URL-scheme checked (https only), and enum-guarded
+// before it is stored or handed to the AI / Meta. Mirrors validateClientFields.
+
+// Budget floor/ceiling in cents — kept local to avoid importing guardrail logic.
+const CAMPAIGN_MIN_BUDGET_CENTS = 10_000; // $100
+const CAMPAIGN_MAX_BUDGET_CENTS = 300_000; // $3,000 (global lifetime cap)
+
+export interface CleanCreative {
+  kind: "IMAGE" | "CAROUSEL" | "VIDEO";
+  label: string;
+  filePaths: string[];
+  primaryText: string;
+  headline: string;
+  linkUrl: string;
+}
+
+export interface CampaignInputValues {
+  campaignName: string;
+  goal: string;
+  landingPageUrl: string;
+  targetAudience: string;
+  budgetCents: number;
+  budgetType: "DAILY" | "LIFETIME";
+  durationDays: number;
+  creatives: CleanCreative[];
+  abTest: boolean;
+  abVariable?: "CREATIVE" | "AUDIENCE";
+  abNotes: string;
+  campaignDirective: string;
+}
+
+function clampInt(v: unknown, min: number, max: number, fallback: number): number {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+/**
+ * Validate + sanitize the New Campaign questionnaire. Returns `{ error }` on a
+ * hard failure (missing name, bad URL) or `{ values }` with cleaned fields.
+ * Media file paths are length-bounded here; their URL/Drive validity is
+ * enforced again at launch (normalizeMediaUrl). linkUrl must be https.
+ */
+export function sanitizeCampaignInput(b: Record<string, unknown>): { error: string } | { values: CampaignInputValues } {
+  const campaignName = cleanText(b.campaignName, 120);
+  if (!campaignName) return { error: "Campaign name is required." };
+
+  const goal = cleanText(b.goal, 60) || "Booking inquiries";
+
+  let landingPageUrl = "";
+  const rawLanding = String(b.landingPageUrl ?? "").trim();
+  if (rawLanding) {
+    const u = safeUrl(rawLanding);
+    if (!u) return { error: "Landing page must be a valid https:// URL." };
+    landingPageUrl = u;
+  }
+
+  const targetAudience = cleanText(b.targetAudience, 4000);
+
+  const budgetCents = clampInt(Number(b.budgetDollars) * 100, CAMPAIGN_MIN_BUDGET_CENTS, CAMPAIGN_MAX_BUDGET_CENTS, CAMPAIGN_MIN_BUDGET_CENTS);
+  const budgetType: "DAILY" | "LIFETIME" = b.budgetType === "DAILY" ? "DAILY" : "LIFETIME";
+  const durationDays = clampInt(b.durationDays, 1, 90, 14);
+
+  const rawCreatives = Array.isArray(b.creatives) ? b.creatives : [];
+  const creatives: CleanCreative[] = rawCreatives.slice(0, 10).map((raw, i) => {
+    const c = (raw ?? {}) as Record<string, unknown>;
+    const kind: CleanCreative["kind"] = c.kind === "CAROUSEL" || c.kind === "VIDEO" ? c.kind : "IMAGE";
+    const filePaths = (Array.isArray(c.filePaths) ? c.filePaths : [])
+      .map((p) => cleanText(p, 600))
+      .filter(Boolean)
+      .slice(0, 10);
+    const linkRaw = String(c.linkUrl ?? "").trim();
+    const linkUrl = linkRaw ? safeUrl(linkRaw) ?? "" : "";
+    return {
+      kind,
+      label: cleanText(c.label, 60) || `Creative ${String.fromCharCode(65 + i)}`,
+      filePaths,
+      primaryText: cleanText(c.primaryText, 2000),
+      headline: cleanText(c.headline, 255),
+      linkUrl,
+    };
+  });
+
+  const abTest = Boolean(b.abTest);
+  const abVariable = b.abVariable === "AUDIENCE" ? "AUDIENCE" : b.abVariable === "CREATIVE" ? "CREATIVE" : undefined;
+  const abNotes = abTest ? cleanText(b.abNotes, 2000) : "";
+  const campaignDirective = cleanText(b.campaignDirective, 2000);
+
+  return {
+    values: { campaignName, goal, landingPageUrl, targetAudience, budgetCents, budgetType, durationDays, creatives, abTest, abVariable, abNotes, campaignDirective },
+  };
+}
+
 export interface ClientFieldValues {
   name?: string;
   contactEmail?: string | null;

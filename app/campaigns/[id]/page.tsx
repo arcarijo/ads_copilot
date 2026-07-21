@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { StopButton } from "@/app/components/StopButton";
+import { DirectiveEditor } from "./DirectiveEditor";
 import type { CopilotPlan } from "@/lib/types";
 import { getSession, canAccessCampaign } from "@/lib/auth";
 
@@ -49,6 +50,14 @@ export default async function CampaignDetail({ params }: { params: Promise<{ id:
           </p>
         </section>
       )}
+
+      <DirectiveEditor
+        campaignId={campaign.id}
+        initialDirective={campaign.directive ?? ""}
+        initialAbNotes={campaign.abNotes ?? ""}
+        abTest={campaign.abTest}
+        directiveAt={campaign.directiveAt ? campaign.directiveAt.toISOString() : null}
+      />
 
       <section>
         <h2 className="mb-3 text-lg font-medium text-[var(--ink-primary)]">Daily Analytics</h2>
