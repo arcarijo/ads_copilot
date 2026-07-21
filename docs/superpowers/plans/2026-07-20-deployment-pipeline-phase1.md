@@ -28,11 +28,11 @@
 - [x] **Task 5** — CI workflow `.github/workflows/ci.yml` — **no-secrets path complete** (risk + static red-team + verdict comment). Dynamic red-team + k6 are commented TODO blocks at the bottom (secret-gated).
 - [~] **Task 6** — PR report poster: a BASIC verdict comment is inlined in ci.yml. Richer `scripts/pipeline/post-report.ts` (parse report JSON + k6 summary into a table) is PENDING.
 - [x] **Task 7** — Runbook `docs/deploy/DEPLOYMENT.md`
-- [ ] **Task 8** — Verify: open a throwaway PR, watch CI, confirm the comment posts (DO THIS FIRST next session)
-- [ ] **User setup** — add GH Actions secrets (staging only) + enable Dependabot in settings
-- [ ] **Task 5b** — finish the secret-gated jobs: wait-for-Vercel-preview → dynamic red-team + k6 (uncomment/complete the TODO blocks in ci.yml)
+- [x] **Task 5b** — secret-gated jobs wired: `preview` (Vercel-API poll for the `-git-` alias) → `dynamic-redteam` + `loadtest`, all gated behind `vars.ENABLE_DYNAMIC_REDTEAM == 'true'` so they stay dormant until opted in. Robustness fix: risk job diffs `github.event.pull_request.base.sha` (origin/main isn't reliable in a PR checkout).
+- [ ] **Task 8** — Verify: open a throwaway PR, watch CI static path, confirm the verdict comment posts.
+- [ ] **User setup (dynamic path)** — add the repo vars + staging secrets from `docs/deploy/DEPLOYMENT.md` "Enabling the dynamic red-team" section, then verify a tier≥1 PR runs the dynamic jobs.
 
-**tsc clean over app + redteam + pipeline scripts.** Nothing committed to prod; all Phase 1 work is on `feat/deploy-pipeline` (no PR opened yet).
+**Branch brought current with `main` (13 commits merged in).** Static CI path is complete and needs no secrets; dynamic path is wired but dormant. Ready to merge Phase 1 to main (CI-only, no prod runtime impact), then verify via Task 8.
 
 ## Resume instructions
 

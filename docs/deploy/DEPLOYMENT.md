@@ -40,6 +40,24 @@ Override with a `risk:high|med|low` label on the PR.
 
 **Rule: production secrets never enter CI.** Migrations run in Vercel's build step (Phase 2), where the prod DB URL already is.
 
+## Enabling the dynamic red-team + k6 in CI (one-time)
+
+The CI **static** pass (risk-score + SAST + secrets + tests + verdict comment) runs on every PR with **no setup**. The **dynamic** jobs (authz/DAST against the live preview + k6) stay dormant until you opt in:
+
+1. Add these **repository variables** (Settings → Secrets and variables → Actions → *Variables*):
+   - `ENABLE_DYNAMIC_REDTEAM = true` — the master switch that activates the dynamic jobs.
+   - `VERCEL_PROJECT_ID = prj_aK01Z4DU5ygCbmX1VO51l3wPu71Q`
+   - `VERCEL_TEAM_ID = team_Isf6Z3rbumOXmfwnrbYjNSvB`
+2. Add these **repository secrets** (all **staging/test only** — never prod):
+   - `VERCEL_TOKEN` — a Vercel access token (read-only is fine) so CI can resolve the preview URL.
+   - `VERCEL_AUTOMATION_BYPASS_SECRET` — Deployment-Protection bypass token.
+   - `STAGING_CLERK_SECRET_KEY` — the staging Clerk `sk_test…` key.
+   - `STAGING_DATABASE_URL` — the **staging** Supabase URL (must contain ref `lprydieusipocvsikkqb`; the red-team guard refuses anything else).
+   - `REDTEAM_ADMIN_EMAIL`, `REDTEAM_MEMBER_EMAIL` — two users in the **staging** Clerk instance (one with `publicMetadata.role = "admin"`, one plain member).
+3. Ensure the **staging DB has the current schema** (it's missing the campaign v2 columns): run `db:push` against staging once. Otherwise preview builds error on the new columns.
+
+With those set, any PR at tier ≥ 1 waits for its Vercel preview, runs the full dynamic red-team + k6 against it, and never touches prod. Unset `ENABLE_DYNAMIC_REDTEAM` to pause it again.
+
 ## Rolling back
 
 Vercel deploys are atomic and every prior production deploy is a rollback candidate:
