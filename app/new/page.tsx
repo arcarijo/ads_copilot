@@ -53,6 +53,20 @@ const KIND_GUIDE: Record<CreativeInput["kind"], { bestFor: string; effort: strin
   },
 };
 
+/** Client-side check: is this a Google Drive FOLDER share link? (mirrors the
+ * server's extractDriveFolderId; kept local so no server module is bundled.) */
+function isDriveFolderLink(v: string): boolean {
+  return /^https?:\/\/(drive|docs)\.google\.com\/.*\/folders\/[A-Za-z0-9_-]{10,}/i.test((v ?? "").trim());
+}
+
+interface FolderCheck {
+  checking: boolean;
+  ok?: boolean;
+  count?: number;
+  names?: string[];
+  error?: string;
+}
+
 export default function NewCampaign() {
   const router = useRouter();
   const [step, setStep] = useState<Step>(1);
@@ -159,6 +173,23 @@ export default function NewCampaign() {
   const [creatives, setCreatives] = useState<CreativeInput[]>([
     { kind: "IMAGE", label: "Creative A", filePaths: [""], primaryText: "", headline: "", linkUrl: "" },
   ]);
+  // Per-creative Drive-folder validation results (carousel folder links).
+  const [folderChecks, setFolderChecks] = useState<Record<number, FolderCheck>>({});
+
+  async function checkFolder(i: number, url: string) {
+    setFolderChecks((m) => ({ ...m, [i]: { checking: true } }));
+    try {
+      const res = await fetch("/api/campaigns/resolve-folder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const j = (await res.json()) as Omit<FolderCheck, "checking">;
+      setFolderChecks((m) => ({ ...m, [i]: { checking: false, ...j } }));
+    } catch {
+      setFolderChecks((m) => ({ ...m, [i]: { checking: false, ok: false, error: "Couldn't check that folder. Try again." } }));
+    }
+  }
 
   // Copilot state
   const [campaignId, setCampaignId] = useState<string | null>(null);
@@ -978,7 +1009,7 @@ export default function NewCampaign() {
                     <div>
                       <label className={labelCls}>
                         {c.kind === "CAROUSEL"
-                          ? "Image links (Google Drive or https, one per line, 2–10)"
+                          ? "Image links (one per line, 2–10) — or one shared Drive folder link"
                           : c.kind === "VIDEO"
                             ? "Video — Google Drive share link (or public https URL)"
                             : "Image — Google Drive share link (or public https URL)"}
@@ -991,16 +1022,37 @@ export default function NewCampaign() {
                         placeholder="https://drive.google.com/file/d/1AbC…/view"
                       />
                       <p className="mt-1 text-xs text-[var(--ink-muted)]">
-                        Paste the Drive share link and set its sharing to <b>&ldquo;Anyone with the link&rdquo;</b> so Meta can
-                        fetch it at launch — we don&rsquo;t copy or store your media.{" "}
-                        <b>Folder links aren&rsquo;t supported</b> — link each file individually.
+                        Set sharing to <b>&ldquo;Anyone with the link&rdquo;</b> so Meta can fetch at launch — we don&rsquo;t copy or store your media.
+                        {c.kind === "CAROUSEL" && <> For a carousel you can also paste <b>one shared folder link</b> and we&rsquo;ll pull its images.</>}
                       </p>
                       {c.kind === "CAROUSEL" && (() => {
-                        const n = c.filePaths.filter((p) => p.trim()).length;
+                        const lines = c.filePaths.map((p) => p.trim()).filter(Boolean);
+                        const folderLink = lines.length === 1 && isDriveFolderLink(lines[0]) ? lines[0] : null;
+                        if (folderLink) {
+                          const fc = folderChecks[i];
+                          return (
+                            <div className="mt-2 space-y-1">
+                              <button
+                                type="button"
+                                onClick={() => checkFolder(i, folderLink)}
+                                disabled={fc?.checking}
+                                className="rounded-lg border border-[var(--line-standard)] px-3 py-1.5 text-xs font-medium text-[var(--ink-secondary)] transition hover:bg-[var(--surface-2)] active:scale-[0.98] disabled:opacity-50"
+                              >
+                                {fc?.checking ? "Checking folder…" : "Check folder contents"}
+                              </button>
+                              {fc && !fc.checking && (
+                                <p className={`text-xs ${fc.ok ? "text-[var(--success)]" : "text-[var(--warning)]"}`}>
+                                  {fc.ok ? `✓ Found ${fc.count} image${fc.count === 1 ? "" : "s"} — ready for a carousel.` : `⚠️ ${fc.error}`}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        }
+                        const n = lines.length;
                         const ok = n >= 2 && n <= 10;
                         return (
                           <p className={`mt-1 text-xs ${ok ? "text-[var(--success)]" : "text-[var(--warning)]"}`}>
-                            {ok ? "✓" : "⚠️"} {n} image link{n === 1 ? "" : "s"} — a carousel needs <b>2–10</b>.
+                            {ok ? "✓" : "⚠️"} {n} image link{n === 1 ? "" : "s"} — a carousel needs <b>2–10</b> (or one shared folder link).
                           </p>
                         );
                       })()}
