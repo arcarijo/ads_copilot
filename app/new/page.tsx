@@ -123,8 +123,11 @@ export default function NewCampaign() {
   const [plan, setPlan] = useState<CopilotPlan | null>(null);
 
   // Preflight validation
-  interface PreflightCheck { item: string; ok: boolean; severity: "error" | "warning"; detail: string }
-  interface PreflightResult { ready: boolean; hasWarnings: boolean; checks: PreflightCheck[] }
+  type JumpStep = 1 | 2 | 3 | 4;
+  interface PreflightCheck { item: string; ok: boolean; severity: "error" | "warning"; detail: string; category: "marketing" | "technical"; jumpStep?: JumpStep }
+  interface InputRow { label: string; value: string; jumpStep: JumpStep }
+  interface AiReadiness { score: number; verdict: string; strengths: string[]; improvements: string[] }
+  interface PreflightResult { ready: boolean; hasWarnings: boolean; checks: PreflightCheck[]; inputs: InputRow[]; ai?: AiReadiness }
   const [preflight, setPreflight] = useState<PreflightResult | null>(null);
   const [preflightBusy, setPreflightBusy] = useState(false);
 
@@ -213,7 +216,9 @@ export default function NewCampaign() {
         budgetDollars,
         budgetType,
         durationDays,
-        creatives: creatives.map((c) => ({ ...c, filePaths: c.filePaths.filter(Boolean) })),
+        // Wire the campaign landing URL to each creative's destination so
+        // clicks have somewhere to go (creatives have no separate URL field).
+        creatives: creatives.map((c) => ({ ...c, filePaths: c.filePaths.filter(Boolean), linkUrl: c.linkUrl || landingPageUrl })),
         abTest,
         abVariable: abTest ? abVariable : undefined,
         abNotes: abTest ? abNotes : undefined,
@@ -251,6 +256,11 @@ export default function NewCampaign() {
       setError("Preflight check could not run. Try again.");
     }
     setPreflightBusy(false);
+  }
+
+  function jumpTo(step: JumpStep) {
+    setPhase("FORM");
+    setStep(step as Step);
   }
 
   async function approveAndLaunch() {
@@ -762,30 +772,82 @@ export default function NewCampaign() {
             {localCheckTime ? ` (${localCheckTime} your time)` : ""}.
           </p>
 
-          {/* Preflight validation gate */}
+          {/* Comprehensive pre-flight check */}
           <div className="rounded-lg border border-[var(--line-subtle)] bg-[var(--surface-2)] p-4">
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-[var(--ink-primary)]">Pre-launch checks</h3>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-[var(--ink-primary)]">Pre-flight check</h3>
               <button
                 onClick={() => campaignId && runPreflight(campaignId)}
                 disabled={preflightBusy}
-                className="text-xs text-[var(--info)] hover:underline disabled:opacity-50"
+                className="flex items-center gap-1.5 text-xs text-[var(--info)] hover:underline disabled:opacity-50"
               >
-                {preflightBusy ? "Running…" : "Re-run"}
+                {preflightBusy ? (<><Spinner /> Running…</>) : "Re-run"}
               </button>
             </div>
-            {preflightBusy && !preflight && <p className="text-sm text-[var(--ink-tertiary)]">Validating plan, budget, creatives, targeting, and live Meta credentials…</p>}
+            {preflightBusy && !preflight && (
+              <p className="text-sm text-[var(--ink-tertiary)]">Reviewing your inputs, Meta best practices, live account credentials, and an AI readiness rating…</p>
+            )}
             {preflight && (
-              <div className="space-y-1.5 text-sm">
-                {preflight.checks.map((c, i) => (
-                  <div key={i} className="flex gap-2">
-                    <span>{c.ok ? "✅" : c.severity === "warning" ? "⚠️" : "❌"}</span>
-                    <div><b className={c.severity === "warning" && !c.ok ? "text-[var(--warning)]" : ""}>{c.item}</b> <span className="text-[var(--ink-secondary)]">— {c.detail}</span></div>
+              <div className="space-y-4">
+                {/* AI readiness score */}
+                {preflight.ai && (() => {
+                  const s = preflight.ai.score;
+                  const color = s >= 90 ? "var(--success)" : s >= 70 ? "var(--accent)" : s >= 50 ? "var(--warning)" : "var(--danger)";
+                  return (
+                    <div className="rounded-lg border p-3" style={{ borderColor: color }}>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-semibold text-[var(--ink-primary)]">AI readiness</span>
+                        <span className="text-2xl font-bold" style={{ color }}>{s}<span className="text-sm text-[var(--ink-muted)]">/100</span></span>
+                      </div>
+                      <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-[var(--surface-3)]">
+                        <div className="h-2 rounded-full" style={{ width: `${s}%`, background: color }} />
+                      </div>
+                      <p className="mt-2 text-xs text-[var(--ink-secondary)]">{preflight.ai.verdict}</p>
+                      {preflight.ai.strengths.length > 0 && (
+                        <p className="mt-1.5 text-xs text-[var(--ink-tertiary)]"><b className="text-[var(--success)]">Strengths:</b> {preflight.ai.strengths.join(" · ")}</p>
+                      )}
+                      {preflight.ai.improvements.length > 0 && (
+                        <div className="mt-1 text-xs text-[var(--ink-tertiary)]">
+                          <b className="text-[var(--warning)]">To improve:</b>
+                          <ul className="ml-4 list-disc">{preflight.ai.improvements.map((im, i) => <li key={i}>{im}</li>)}</ul>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* Your inputs — review & edit */}
+                <div>
+                  <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--ink-tertiary)]">Your inputs</h4>
+                  <div className="divide-y divide-[var(--line-subtle)] rounded-lg border border-[var(--line-subtle)]">
+                    {preflight.inputs.map((row, i) => (
+                      <div key={i} className="flex items-center justify-between gap-3 px-3 py-1.5 text-sm">
+                        <span className="shrink-0 text-[var(--ink-tertiary)]">{row.label}</span>
+                        <span className="flex-1 truncate text-right text-[var(--ink-secondary)]">{row.value}</span>
+                        <button onClick={() => jumpTo(row.jumpStep)} className="shrink-0 text-xs text-[var(--info)] hover:underline">Edit</button>
+                      </div>
+                    ))}
                   </div>
-                ))}
-                {!preflight.ready && <p className="pt-1 text-sm font-semibold text-[var(--danger)]">❌ Resolve the blocking items above before launching.</p>}
-                {preflight.ready && preflight.hasWarnings && <p className="pt-1 text-sm text-[var(--warning)]">⚠️ Ready to launch, but review the warnings above.</p>}
-                {preflight.ready && !preflight.hasWarnings && <p className="pt-1 text-sm font-semibold text-[var(--success)]">✅ All checks passed — ready to launch.</p>}
+                </div>
+
+                {/* Marketing readiness */}
+                <PreflightCategory
+                  title="Marketing readiness"
+                  checks={preflight.checks.filter((c) => c.category === "marketing")}
+                  onJump={jumpTo}
+                />
+
+                {/* Technical */}
+                <PreflightCategory
+                  title="Technical"
+                  checks={preflight.checks.filter((c) => c.category === "technical")}
+                  onJump={jumpTo}
+                />
+
+                {/* Overall verdict */}
+                {!preflight.ready && <p className="text-sm font-semibold text-[var(--danger)]">❌ Resolve the blocking items above before launching.</p>}
+                {preflight.ready && preflight.hasWarnings && <p className="text-sm text-[var(--warning)]">⚠️ Ready to launch — review the warnings to get the most from your spend.</p>}
+                {preflight.ready && !preflight.hasWarnings && <p className="text-sm font-semibold text-[var(--success)]">✅ All checks passed — ready to launch.</p>}
               </div>
             )}
           </div>
@@ -810,5 +872,33 @@ function Spinner() {
       className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-black/30 border-t-black"
       aria-hidden
     />
+  );
+}
+
+interface PfCheck { item: string; ok: boolean; severity: "error" | "warning"; detail: string; jumpStep?: 1 | 2 | 3 | 4 }
+
+/** A titled group of pre-flight checks with a jump-to-fix button on failures. */
+function PreflightCategory({ title, checks, onJump }: { title: string; checks: PfCheck[]; onJump: (s: 1 | 2 | 3 | 4) => void }) {
+  if (checks.length === 0) return null;
+  return (
+    <div>
+      <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--ink-tertiary)]">{title}</h4>
+      <div className="space-y-1.5 text-sm">
+        {checks.map((c, i) => (
+          <div key={i} className="flex items-start gap-2">
+            <span className="shrink-0">{c.ok ? "✅" : c.severity === "warning" ? "⚠️" : "❌"}</span>
+            <div className="flex-1">
+              <b className={c.severity === "warning" && !c.ok ? "text-[var(--warning)]" : ""}>{c.item}</b>{" "}
+              <span className="text-[var(--ink-secondary)]">— {c.detail}</span>
+            </div>
+            {!c.ok && c.jumpStep && (
+              <button onClick={() => onJump(c.jumpStep!)} className="shrink-0 rounded border border-[var(--line-standard)] px-2 py-0.5 text-xs text-[var(--info)] hover:bg-[var(--surface-1)]">
+                Fix →
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
