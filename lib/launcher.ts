@@ -107,6 +107,18 @@ export async function launchToMeta(campaignId: string): Promise<void> {
         if (!norm) throw new Error(`Creative "${c.label}": that video link isn't a valid Google Drive share link or https URL.`);
         c.filePaths[0] = await uploadVideoFromUrl(creds, norm.url);
       }
+    } else if (c.kind === "CAROUSEL") {
+      // Meta carousels require 2–10 cards, images only. Reject folder links and
+      // anything that didn't normalize to a fetchable URL before we spend.
+      const links = c.filePaths.map((p) => p.trim()).filter(Boolean);
+      if (links.length < 2 || links.length > 10) {
+        throw new Error(`Creative "${c.label}": a carousel needs 2–10 image links (got ${links.length}).`);
+      }
+      c.filePaths = links.map((p) => {
+        const norm = normalizeMediaUrl(p);
+        if (!norm) throw new Error(`Creative "${c.label}": "${p.slice(0, 40)}…" isn't a valid Google Drive share link or https URL. Folder links aren't supported — link each image individually.`);
+        return norm.url;
+      });
     } else {
       c.filePaths = c.filePaths.map((p) => normalizeMediaUrl(p)?.url ?? p);
     }

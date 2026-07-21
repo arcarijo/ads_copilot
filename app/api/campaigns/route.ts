@@ -64,6 +64,7 @@ export async function POST(req: NextRequest) {
     abVariable: cv.abVariable,
     abNotes: cv.abNotes,
     campaignDirective: cv.campaignDirective,
+    campaignIntent: cv.campaignIntent,
   });
 
   // Structured targeting (locations + age/gender) has its own validator.
