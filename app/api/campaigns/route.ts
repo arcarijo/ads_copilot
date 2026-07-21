@@ -4,7 +4,7 @@ import { runCopilot, QuestionnaireInput } from "@/lib/copilot";
 import { runResearch } from "@/lib/research";
 import { requireSession, campaignScope, canAccessClient, canAccessCampaign } from "@/lib/auth";
 import { aiRateLimited } from "@/lib/rateLimit";
-import { cleanText } from "@/lib/sanitize";
+import { sanitizeCampaignInput } from "@/lib/sanitize";
 import { validateTargeting } from "@/lib/targeting";
 
 export async function GET() {
@@ -45,16 +45,36 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Server-side trust boundary: sanitize every campaign field (length bounds,
+  // control-char stripping, https-only URLs, enum guards, budget clamp) before
+  // it is stored, sent to the AI, or handed to Meta.
+  const clean = sanitizeCampaignInput(input as unknown as Record<string, unknown>);
+  if ("error" in clean) return NextResponse.json({ error: clean.error }, { status: 422 });
+  const cv = clean.values;
+  Object.assign(input, {
+    campaignName: cv.campaignName,
+    goal: cv.goal,
+    landingPageUrl: cv.landingPageUrl,
+    targetAudience: cv.targetAudience,
+    budgetDollars: cv.budgetCents / 100,
+    budgetType: cv.budgetType,
+    durationDays: cv.durationDays,
+    creatives: cv.creatives,
+    abTest: cv.abTest,
+    abVariable: cv.abVariable,
+    abNotes: cv.abNotes,
+    campaignDirective: cv.campaignDirective,
+  });
+
+  // Structured targeting (locations + age/gender) has its own validator.
+  const tv = validateTargeting(input.targeting);
+  if ("error" in tv) return NextResponse.json({ error: tv.error }, { status: 422 });
+  input.targeting = tv.values;
+
   try {
-    const budgetCents = Math.round(input.budgetDollars * 100);
-    // Per-campaign steer + A/B intent, sanitized. Weighed by the copilot now
-    // and by the daily optimizer once wired; editable after launch.
-    const directive = cleanText(input.campaignDirective ?? "", 2000);
-    const abNotes = input.abTest ? cleanText(input.abNotes ?? "", 2000) : "";
-    // Sanitize/validate structured targeting (locations + age/gender) up front.
-    const tv = validateTargeting(input.targeting);
-    if ("error" in tv) return NextResponse.json({ error: tv.error }, { status: 422 });
-    input.targeting = tv.values;
+    const budgetCents = cv.budgetCents;
+    const directive = cv.campaignDirective;
+    const abNotes = cv.abNotes;
     const campaign = input.campaignId
       ? await prisma.campaign.findUniqueOrThrow({ where: { id: input.campaignId } })
       : await prisma.campaign.create({

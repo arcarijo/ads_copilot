@@ -16,6 +16,10 @@ export interface TargetingInput {
   ageMin?: number; // 18–65
   ageMax?: number; // 18–65
   gender?: "ALL" | "MALE" | "FEMALE";
+  // Natural-language coverage intent from the GTA coverage ladder (e.g. "the
+  // whole GTA", "all of Ontario"). Guides region/country-level targeting the
+  // named-city radius list can't express. Cleaned, capped.
+  coverageNote?: string;
 }
 
 export const META_MAX_RADIUS_KM = 80;
@@ -55,8 +59,9 @@ export function validateTargeting(body: unknown): { error: string } | { values: 
   }
 
   const gender = b.gender === "MALE" || b.gender === "FEMALE" ? b.gender : "ALL";
+  const coverageNote = cleanText(typeof b.coverageNote === "string" ? b.coverageNote : "", 300) || undefined;
 
-  return { values: { locations, ageMin, ageMax, gender: gender as TargetingInput["gender"] } };
+  return { values: { locations, ageMin, ageMax, gender: gender as TargetingInput["gender"], coverageNote } };
 }
 
 /** Meta gender codes: 1 = male, 2 = female; omit for all. */
@@ -69,6 +74,9 @@ export function metaGenders(gender?: TargetingInput["gender"]): number[] | undef
 /** Human-readable, model-facing description of the structured targeting. */
 export function formatTargetingForModel(t: TargetingInput): string {
   const lines: string[] = [];
+  if (t.coverageNote) {
+    lines.push(`COVERAGE INTENT (the user chose this reach — honor it; use region/country-level geo_locations where it calls for a province or country): ${t.coverageNote}`);
+  }
   if (t.locations.length) {
     lines.push("TARGET LOCATIONS (the user picked these explicitly — build geo_locations from them; use custom_locations with the given radius, or a matching Meta city key):");
     for (const l of t.locations) lines.push(`- ${l.name} — ${l.radiusKm}km radius`);

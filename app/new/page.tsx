@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CopilotPlan, CreativeInput } from "@/lib/types";
+import { resolveCoverage, corridorsFor, ONTARIO_CITIES, TIER_ORDER, TIER_LABELS, type CoverageTier } from "@/lib/geoOntario";
 
 interface ClientOption {
   id: string;
@@ -35,6 +36,7 @@ export default function NewCampaign() {
   const [clientId, setClientId] = useState("");
   const [prefillNote, setPrefillNote] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(true);
+  const [userId, setUserId] = useState<string | null>(null);
   useEffect(() => {
     fetch("/api/clients")
       .then((r) => r.json())
@@ -47,9 +49,22 @@ export default function NewCampaign() {
       .catch(() => {});
     fetch("/api/me")
       .then((r) => r.json())
-      .then((j) => setIsAdmin(j.role === "admin"))
+      .then((j) => {
+        setIsAdmin(j.role === "admin");
+        if (typeof j.userId === "string") setUserId(j.userId);
+      })
       .catch(() => {});
   }, []);
+
+  // Draft autosave (localStorage, per user). Keeps the form from being lost on
+  // refresh/close. The draft never touches the server — it repopulates the form,
+  // which is fully re-sanitized server-side on submit — so it adds no new
+  // server attack surface.
+  const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
+  const [draftRestoreDone, setDraftRestoreDone] = useState(false); // gates autosave until any existing draft is read
+  const [hadSavedDraft, setHadSavedDraft] = useState(false); // whether a draft was actually restored (for the note)
+  const draftKey = userId ? `adscopilot:new-campaign-draft:v1:${userId}` : null;
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // When a client is chosen, pre-fill audience & geography from their strategy
   // profile — the profile is ongoing ground truth. Never clobber typed input.
@@ -67,7 +82,7 @@ export default function NewCampaign() {
         const geo = (sections.geography ?? "").trim();
         if (aud) { setTargetAudience((v) => (v.trim() ? v : aud)); filled.push("audience"); }
         if (geo) {
-          setLocations((locs) => (locs.length === 1 && !locs[0].name.trim() ? [{ name: geo, radiusKm: locs[0].radiusKm }] : locs));
+          setHostCity((v) => (v.trim() ? v : geo));
           filled.push("location");
         }
         setPrefillNote(filled.length ? `Pre-filled ${filled.join(" & ")} from this client's strategy profile — edit freely.` : null);
@@ -80,12 +95,18 @@ export default function NewCampaign() {
   const [goal, setGoal] = useState("Booking inquiries");
   const [landingPageUrl, setLandingPageUrl] = useState("");
   const [targetAudience, setTargetAudience] = useState("");
+  // GTA coverage ladder (primary geo UX) + manual rows (collapsed advanced).
+  const [hostCity, setHostCity] = useState("");
+  const [coverageTier, setCoverageTier] = useState<CoverageTier>("CITY_PLUS_NEARBY");
+  const [useCorridors, setUseCorridors] = useState(true);
+  const [showAdvancedGeo, setShowAdvancedGeo] = useState(false);
   const [locations, setLocations] = useState<LocationRow[]>([{ name: "", radiusKm: 15 }]);
   const [ageMin, setAgeMin] = useState("");
   const [ageMax, setAgeMax] = useState("");
   const [gender, setGender] = useState<"ALL" | "MALE" | "FEMALE">("ALL");
   const [checking, setChecking] = useState(false);
   const [checkResult, setCheckResult] = useState<{ score: number; verdict: string; gaps: string[]; suggestions: string[] } | null>(null);
+  const [elapsed, setElapsed] = useState(0); // seconds the current AI call has been running
   const [budgetDollars, setBudgetDollars] = useState(250);
   const [budgetType, setBudgetType] = useState<"DAILY" | "LIFETIME">("LIFETIME");
   const [durationDays, setDurationDays] = useState(14);
@@ -116,10 +137,94 @@ export default function NewCampaign() {
   const [plan, setPlan] = useState<CopilotPlan | null>(null);
 
   // Preflight validation
-  interface PreflightCheck { item: string; ok: boolean; severity: "error" | "warning"; detail: string }
-  interface PreflightResult { ready: boolean; hasWarnings: boolean; checks: PreflightCheck[] }
+  type JumpStep = 1 | 2 | 3 | 4;
+  interface PreflightCheck { item: string; ok: boolean; severity: "error" | "warning"; detail: string; category: "marketing" | "technical"; jumpStep?: JumpStep }
+  interface InputRow { label: string; value: string; jumpStep: JumpStep }
+  interface AiReadiness { score: number; verdict: string; strengths: string[]; improvements: string[] }
+  interface PreflightResult { ready: boolean; hasWarnings: boolean; checks: PreflightCheck[]; inputs: InputRow[]; ai?: AiReadiness }
   const [preflight, setPreflight] = useState<PreflightResult | null>(null);
   const [preflightBusy, setPreflightBusy] = useState(false);
+
+  // Tick an elapsed-seconds counter while an AI call is in flight, so the long
+  // "Consulting AI Copilot" step shows progress instead of appearing frozen.
+  useEffect(() => {
+    if (!busy) {
+      setElapsed(0);
+      return;
+    }
+    const t = setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => clearInterval(t);
+  }, [busy]);
+
+  // Restore a saved draft once, as soon as we know which user this is. Shapes
+  // from storage are defensively coerced so a tampered/corrupt draft can only
+  // repopulate the form (never crash it), and everything is re-validated
+  // server-side on submit.
+  useEffect(() => {
+    if (!draftKey || draftRestoreDone) return;
+    try {
+      const raw = localStorage.getItem(draftKey);
+      if (raw) {
+        const d = JSON.parse(raw) as Record<string, unknown>;
+        const s = (k: string, set: (v: string) => void) => { if (typeof d[k] === "string") set(d[k] as string); };
+        s("campaignName", setCampaignName); s("goal", setGoal); s("landingPageUrl", setLandingPageUrl);
+        s("clientId", setClientId); s("targetAudience", setTargetAudience); s("hostCity", setHostCity);
+        s("ageMin", setAgeMin); s("ageMax", setAgeMax); s("abNotes", setAbNotes); s("campaignDirective", setCampaignDirective);
+        if (typeof d.coverageTier === "string") setCoverageTier(d.coverageTier as CoverageTier);
+        if (typeof d.useCorridors === "boolean") setUseCorridors(d.useCorridors as boolean);
+        if (d.gender === "MALE" || d.gender === "FEMALE" || d.gender === "ALL") setGender(d.gender);
+        if (typeof d.budgetDollars === "number") setBudgetDollars(d.budgetDollars as number);
+        if (d.budgetType === "DAILY" || d.budgetType === "LIFETIME") setBudgetType(d.budgetType);
+        if (typeof d.durationDays === "number") setDurationDays(d.durationDays as number);
+        if (typeof d.abTest === "boolean") setAbTest(d.abTest as boolean);
+        if (d.abVariable === "CREATIVE" || d.abVariable === "AUDIENCE") setAbVariable(d.abVariable);
+        if (Array.isArray(d.locations)) {
+          setLocations((d.locations as unknown[]).slice(0, 10).map((rw) => {
+            const l = (rw ?? {}) as Record<string, unknown>;
+            const r = Math.round(Number(l.radiusKm));
+            return { name: typeof l.name === "string" ? l.name : "", radiusKm: Number.isFinite(r) ? Math.min(80, Math.max(1, r)) : 15 };
+          }));
+        }
+        if (Array.isArray(d.creatives)) {
+          setCreatives((d.creatives as unknown[]).slice(0, 10).map((rw, i) => {
+            const c = (rw ?? {}) as Record<string, unknown>;
+            const kind = c.kind === "CAROUSEL" || c.kind === "VIDEO" ? c.kind : "IMAGE";
+            return {
+              kind: kind as CreativeInput["kind"],
+              label: typeof c.label === "string" ? c.label : `Creative ${String.fromCharCode(65 + i)}`,
+              filePaths: Array.isArray(c.filePaths) ? ((c.filePaths as unknown[]).filter((x) => typeof x === "string") as string[]) : [""],
+              primaryText: typeof c.primaryText === "string" ? c.primaryText : "",
+              headline: typeof c.headline === "string" ? c.headline : "",
+              linkUrl: typeof c.linkUrl === "string" ? c.linkUrl : "",
+            };
+          }));
+        }
+        setHadSavedDraft(true);
+      }
+    } catch {
+      /* corrupt draft — ignore and start fresh */
+    }
+    setDraftRestoreDone(true);
+  }, [draftKey, draftRestoreDone]);
+
+  // Autosave the form (debounced) once any existing draft has been read.
+  useEffect(() => {
+    if (!draftKey || !draftRestoreDone || phase !== "FORM") return;
+    const snapshot = { campaignName, goal, landingPageUrl, clientId, targetAudience, hostCity, coverageTier, useCorridors, locations, ageMin, ageMax, gender, budgetDollars, budgetType, durationDays, creatives, abTest, abVariable, abNotes, campaignDirective };
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      try { localStorage.setItem(draftKey, JSON.stringify(snapshot)); setDraftSavedAt(Date.now()); } catch { /* quota — ignore */ }
+    }, 600);
+    return () => clearTimeout(saveTimer.current);
+  }, [draftKey, draftRestoreDone, phase, campaignName, goal, landingPageUrl, clientId, targetAudience, hostCity, coverageTier, useCorridors, locations, ageMin, ageMax, gender, budgetDollars, budgetType, durationDays, creatives, abTest, abVariable, abNotes, campaignDirective]);
+
+  function clearDraft() {
+    if (draftKey) {
+      try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
+    }
+    setDraftSavedAt(null);
+    setHadSavedDraft(false);
+  }
 
   function updateLocation(i: number, patch: Partial<LocationRow>) {
     setLocations((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
@@ -142,9 +247,18 @@ export default function NewCampaign() {
     ]);
   }
 
+  // Resolve the coverage ladder → concrete Meta locations + strategy hints.
+  const coverage = useMemo(
+    () => resolveCoverage(hostCity, coverageTier, useCorridors),
+    [hostCity, coverageTier, useCorridors],
+  );
+
   function buildTargeting() {
+    const manual = locations.map((l) => ({ name: l.name.trim(), radiusKm: l.radiusKm })).filter((l) => l.name);
+    const resolved = coverage.locations.map((l) => ({ name: l.name, radiusKm: l.radiusKm }));
     return {
-      locations: locations.map((l) => ({ name: l.name.trim(), radiusKm: l.radiusKm })).filter((l) => l.name),
+      locations: [...resolved, ...manual],
+      coverageNote: coverage.coverageNote,
       ageMin: ageMin === "" ? undefined : Number(ageMin),
       ageMax: ageMax === "" ? undefined : Number(ageMax),
       gender,
@@ -181,12 +295,14 @@ export default function NewCampaign() {
         goal,
         landingPageUrl,
         targetAudience,
-        geography: locations.map((l) => `${l.name.trim()} (${l.radiusKm}km)`).filter((s) => s.length > 6).join("; "),
+        geography: [coverage.coverageNote, ...locations.map((l) => l.name.trim()).filter(Boolean)].filter(Boolean).join(" | "),
         targeting: buildTargeting(),
         budgetDollars,
         budgetType,
         durationDays,
-        creatives: creatives.map((c) => ({ ...c, filePaths: c.filePaths.filter(Boolean) })),
+        // Wire the campaign landing URL to each creative's destination so
+        // clicks have somewhere to go (creatives have no separate URL field).
+        creatives: creatives.map((c) => ({ ...c, filePaths: c.filePaths.filter(Boolean), linkUrl: c.linkUrl || landingPageUrl })),
         abTest,
         abVariable: abTest ? abVariable : undefined,
         abNotes: abTest ? abNotes : undefined,
@@ -226,6 +342,11 @@ export default function NewCampaign() {
     setPreflightBusy(false);
   }
 
+  function jumpTo(step: JumpStep) {
+    setPhase("FORM");
+    setStep(step as Step);
+  }
+
   async function approveAndLaunch() {
     if (!campaignId) return;
     setBusy(true);
@@ -240,6 +361,7 @@ export default function NewCampaign() {
       setPhase("RECEIPT");
       return;
     }
+    clearDraft(); // campaign launched — the draft is no longer needed
     router.push(`/campaigns/${campaignId}`);
   }
 
@@ -265,6 +387,24 @@ export default function NewCampaign() {
               </li>
             ))}
           </ol>
+
+          <div className="flex items-center justify-between gap-3 text-xs">
+            <span className="text-[var(--ink-muted)]">
+              {hadSavedDraft && <span className="text-[var(--success)]">↩ Restored your saved draft. </span>}
+              {draftSavedAt
+                ? "✓ Progress saved automatically — safe to refresh or come back later."
+                : "Your progress saves automatically as you go."}
+            </span>
+            {(draftSavedAt || hadSavedDraft) && (
+              <button
+                type="button"
+                onClick={() => { clearDraft(); window.location.reload(); }}
+                className="shrink-0 text-[var(--ink-tertiary)] hover:underline"
+              >
+                Start over
+              </button>
+            )}
+          </div>
 
           <div className="space-y-4 rounded-xl border border-[var(--line-subtle)] bg-[var(--surface-1)] p-6">
             {step === 1 && (
@@ -328,48 +468,114 @@ export default function NewCampaign() {
                 <div>
                   <label className={labelCls}>Where should this campaign target?</label>
                   <p className="mb-2 text-xs text-[var(--ink-muted)]">
-                    Add the cities, neighbourhoods, or addresses this campaign should reach, each with a radius (Meta allows
-                    up to {MAX_RADIUS_KM}km). The app validates and formats these into Meta&rsquo;s location targeting — no guesswork.
+                    Tell us where your event or studio is, then choose how far to reach — we turn that into Meta location
+                    targeting for you.
                   </p>
-                  <div className="space-y-2">
-                    {locations.map((loc, i) => (
-                      <div key={i} className="flex items-center gap-2">
-                        <input
-                          className={`${inputCls} flex-1`}
-                          value={loc.name}
-                          onChange={(e) => updateLocation(i, { name: e.target.value })}
-                          placeholder="City, neighbourhood, or address — e.g. Hamilton, ON"
-                        />
-                        <div className="flex items-center gap-1">
-                          <input
-                            type="number"
-                            min={1}
-                            max={MAX_RADIUS_KM}
-                            className={`${inputCls} w-20`}
-                            value={loc.radiusKm}
-                            onChange={(e) => {
-                              const n = Math.round(Number(e.target.value));
-                              updateLocation(i, { radiusKm: Number.isFinite(n) && n > 0 ? Math.min(MAX_RADIUS_KM, n) : 1 });
-                            }}
-                          />
-                          <span className="text-xs text-[var(--ink-muted)]">km</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => removeLocation(i)}
-                          disabled={locations.length === 1}
-                          className="rounded-lg border border-[var(--line-standard)] px-2 py-2 text-xs text-[var(--ink-tertiary)] disabled:opacity-30"
-                          aria-label="Remove location"
-                        >
-                          ✕
-                        </button>
-                      </div>
+
+                  <label className="mb-1 block text-xs font-medium text-[var(--ink-tertiary)]">Event / studio city</label>
+                  <input
+                    className={inputCls}
+                    list="ontario-cities"
+                    value={hostCity}
+                    onChange={(e) => setHostCity(e.target.value)}
+                    placeholder="e.g. Milton, ON"
+                  />
+                  <datalist id="ontario-cities">
+                    {ONTARIO_CITIES.map((c) => (
+                      <option key={c.name} value={`${c.name}, ON`} />
                     ))}
+                  </datalist>
+
+                  <label className="mb-1 mt-3 block text-xs font-medium text-[var(--ink-tertiary)]">How far should this reach?</label>
+                  <div className="space-y-1.5">
+                    {TIER_ORDER.map((tier) => {
+                      const active = coverageTier === tier;
+                      const cityShort = hostCity.split(",")[0].trim();
+                      return (
+                        <label
+                          key={tier}
+                          className="flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm"
+                          style={{
+                            borderColor: active ? "var(--accent)" : "var(--line-subtle)",
+                            background: active ? "var(--accent-wash)" : "transparent",
+                          }}
+                        >
+                          <input type="radio" name="coverage" checked={active} onChange={() => setCoverageTier(tier)} className="h-3.5 w-3.5" />
+                          <span>{cityShort ? TIER_LABELS[tier].replace("my city", cityShort) : TIER_LABELS[tier]}</span>
+                        </label>
+                      );
+                    })}
                   </div>
-                  {locations.length < 10 && (
-                    <button type="button" onClick={addLocation} className="mt-2 text-sm text-[var(--success)] hover:underline">
-                      + Add another location
-                    </button>
+
+                  {coverageTier === "CITY_PLUS_NEARBY" && corridorsFor(hostCity).length > 0 && (
+                    <label className="mt-2 flex items-center gap-2 text-xs text-[var(--ink-secondary)]">
+                      <input type="checkbox" checked={useCorridors} onChange={(e) => setUseCorridors(e.target.checked)} className="h-3.5 w-3.5" />
+                      Include towns along the {corridorsFor(hostCity).join(" & ")} GO transit corridor
+                    </label>
+                  )}
+
+                  {(coverage.locations.length > 0 || coverage.coverageNote) && (
+                    <p className="mt-2 rounded-lg bg-[var(--surface-2)] px-3 py-2 text-xs text-[var(--ink-secondary)]">
+                      <b>Meta targeting:</b>{" "}
+                      {coverage.locations.length
+                        ? coverage.locations.map((l) => `${l.name} (${l.radiusKm}km)`).join(" · ")
+                        : coverage.coverageNote}
+                    </p>
+                  )}
+
+                  {coverage.hints.map((h, i) => (
+                    <p key={i} className="mt-2 rounded-lg bg-[var(--warning-wash)] px-3 py-2 text-xs text-[var(--warning)]">💡 {h}</p>
+                  ))}
+
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvancedGeo((v) => !v)}
+                    className="mt-3 text-xs text-[var(--ink-tertiary)] hover:underline"
+                  >
+                    {showAdvancedGeo ? "▾ Hide advanced" : "▸ Advanced: add specific cities / addresses"}
+                  </button>
+                  {showAdvancedGeo && (
+                    <div className="mt-2 space-y-2">
+                      <p className="text-xs text-[var(--ink-muted)]">Added on top of your coverage choice above (up to {MAX_RADIUS_KM}km each).</p>
+                      {locations.map((loc, i) => (
+                        <div key={i} className="flex items-center gap-2">
+                          <input
+                            className={`${inputCls} flex-1`}
+                            value={loc.name}
+                            onChange={(e) => updateLocation(i, { name: e.target.value })}
+                            placeholder="City, neighbourhood, or address"
+                          />
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              min={1}
+                              max={MAX_RADIUS_KM}
+                              className={`${inputCls} w-20`}
+                              value={loc.radiusKm}
+                              onChange={(e) => {
+                                const n = Math.round(Number(e.target.value));
+                                updateLocation(i, { radiusKm: Number.isFinite(n) && n > 0 ? Math.min(MAX_RADIUS_KM, n) : 1 });
+                              }}
+                            />
+                            <span className="text-xs text-[var(--ink-muted)]">km</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeLocation(i)}
+                            disabled={locations.length === 1}
+                            className="rounded-lg border border-[var(--line-standard)] px-2 py-2 text-xs text-[var(--ink-tertiary)] disabled:opacity-30"
+                            aria-label="Remove location"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                      {locations.length < 10 && (
+                        <button type="button" onClick={addLocation} className="text-sm text-[var(--success)] hover:underline">
+                          + Add another location
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
 
@@ -505,15 +711,25 @@ export default function NewCampaign() {
                         fetch it at launch — we don&rsquo;t copy or store your media.
                       </p>
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className={labelCls}>Headline</label>
-                        <input className={inputCls} value={c.headline ?? ""} onChange={(e) => updateCreative(i, { headline: e.target.value })} />
-                      </div>
-                      <div>
-                        <label className={labelCls}>Primary text</label>
-                        <input className={inputCls} value={c.primaryText ?? ""} onChange={(e) => updateCreative(i, { primaryText: e.target.value })} />
-                      </div>
+                    <div>
+                      <label className={labelCls}>Headline</label>
+                      <input className={inputCls} value={c.headline ?? ""} onChange={(e) => updateCreative(i, { headline: e.target.value })} placeholder="e.g. Book Your 2026 Wedding Date" />
+                      <p className="mt-1 text-xs text-[var(--ink-muted)]">The bold line under your image — short and punchy (~5–7 words).</p>
+                    </div>
+                    <div>
+                      <label className={labelCls}>Primary text</label>
+                      <textarea
+                        className={inputCls}
+                        rows={4}
+                        value={c.primaryText ?? ""}
+                        onChange={(e) => updateCreative(i, { primaryText: e.target.value })}
+                        placeholder="e.g. Say “I do” at Hamilton’s all-in-one waterfront venue — intimate weddings up to 80 guests, in-house catering, and a dedicated planner. Now booking spring & summer 2026. Tap to check your date."
+                      />
+                      <p className="mt-1 text-xs text-[var(--ink-muted)]">
+                        The main body of your ad. Lead with your hook in the <b>first ~125 characters</b> — that&rsquo;s what shows
+                        before Meta&rsquo;s &ldquo;See more&rdquo; cut-off on mobile. Communicate your <b>offer</b>, <b>what makes you
+                        different</b>, and a clear <b>call to action</b>. One to three short sentences almost always beats a wall of text.
+                      </p>
                     </div>
                   </div>
                 ))}
@@ -594,11 +810,16 @@ export default function NewCampaign() {
                   Next
                 </button>
               ) : (
-                <button onClick={() => submitToCopilot()} disabled={busy || !campaignName} className="rounded-lg bg-[var(--accent)] px-5 py-2 text-sm font-semibold text-black hover:bg-[var(--accent-strong)] disabled:opacity-50">
-                  {busy ? "Consulting AI Copilot…" : "Review with AI Copilot →"}
+                <button onClick={() => submitToCopilot()} disabled={busy || !campaignName} className="flex items-center gap-2 rounded-lg bg-[var(--accent)] px-5 py-2 text-sm font-semibold text-black hover:bg-[var(--accent-strong)] disabled:opacity-50">
+                  {busy ? (<><Spinner /> Consulting AI Copilot… {elapsed}s</>) : "Review with AI Copilot →"}
                 </button>
               )}
             </div>
+            {busy && step === 4 && (
+              <p className="pt-2 text-right text-xs text-[var(--ink-muted)]">
+                The AI is analysing your inputs and building a Meta-ready plan — usually 10–30&nbsp;seconds. Please keep this tab open.
+              </p>
+            )}
           </div>
         </>
       )}
@@ -615,16 +836,25 @@ export default function NewCampaign() {
           <button
             onClick={() => submitToCopilot(answers)}
             disabled={busy || questions.some((q) => !answers[q]?.trim())}
-            className="rounded-lg bg-[var(--accent)] px-5 py-2 text-sm font-semibold text-black hover:bg-[var(--accent-strong)] disabled:opacity-50"
+            className="flex items-center gap-2 rounded-lg bg-[var(--accent)] px-5 py-2 text-sm font-semibold text-black hover:bg-[var(--accent-strong)] disabled:opacity-50"
           >
-            {busy ? "Re-planning…" : "Submit answers"}
+            {busy ? (<><Spinner /> Re-planning… {elapsed}s</>) : "Submit answers"}
           </button>
         </div>
       )}
 
       {(phase === "RECEIPT" || phase === "LAUNCHING") && plan && (
         <div className="space-y-5 rounded-xl border border-[var(--line-subtle)] bg-[var(--surface-1)] p-6">
-          <h2 className="text-lg font-semibold">📋 Campaign Receipt — review before launch</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold">📋 Pre-Launch Review — confirm before you launch</h2>
+            <button
+              onClick={() => { setPhase("FORM"); setStep(4); }}
+              disabled={phase === "LAUNCHING"}
+              className="rounded-lg border border-[var(--line-standard)] px-3 py-1.5 text-sm text-[var(--ink-secondary)] hover:bg-[var(--surface-2)] disabled:opacity-30"
+            >
+              ← Back to edit
+            </button>
+          </div>
           <table className="w-full text-sm">
             <tbody className="[&_td]:py-1.5">
               <tr><td className="w-40 text-[var(--ink-tertiary)]">Campaign</td><td className="font-medium">{plan.campaign.name}</td></tr>
@@ -645,30 +875,82 @@ export default function NewCampaign() {
             {localCheckTime ? ` (${localCheckTime} your time)` : ""}.
           </p>
 
-          {/* Preflight validation gate */}
+          {/* Comprehensive pre-flight check */}
           <div className="rounded-lg border border-[var(--line-subtle)] bg-[var(--surface-2)] p-4">
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-[var(--ink-primary)]">Pre-launch checks</h3>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-[var(--ink-primary)]">Pre-flight check</h3>
               <button
                 onClick={() => campaignId && runPreflight(campaignId)}
                 disabled={preflightBusy}
-                className="text-xs text-[var(--info)] hover:underline disabled:opacity-50"
+                className="flex items-center gap-1.5 text-xs text-[var(--info)] hover:underline disabled:opacity-50"
               >
-                {preflightBusy ? "Running…" : "Re-run"}
+                {preflightBusy ? (<><Spinner /> Running…</>) : "Re-run"}
               </button>
             </div>
-            {preflightBusy && !preflight && <p className="text-sm text-[var(--ink-tertiary)]">Validating plan, budget, creatives, targeting, and live Meta credentials…</p>}
+            {preflightBusy && !preflight && (
+              <p className="text-sm text-[var(--ink-tertiary)]">Reviewing your inputs, Meta best practices, live account credentials, and an AI readiness rating…</p>
+            )}
             {preflight && (
-              <div className="space-y-1.5 text-sm">
-                {preflight.checks.map((c, i) => (
-                  <div key={i} className="flex gap-2">
-                    <span>{c.ok ? "✅" : c.severity === "warning" ? "⚠️" : "❌"}</span>
-                    <div><b className={c.severity === "warning" && !c.ok ? "text-[var(--warning)]" : ""}>{c.item}</b> <span className="text-[var(--ink-secondary)]">— {c.detail}</span></div>
+              <div className="space-y-4">
+                {/* AI readiness score */}
+                {preflight.ai && (() => {
+                  const s = preflight.ai.score;
+                  const color = s >= 90 ? "var(--success)" : s >= 70 ? "var(--accent)" : s >= 50 ? "var(--warning)" : "var(--danger)";
+                  return (
+                    <div className="rounded-lg border p-3" style={{ borderColor: color }}>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-semibold text-[var(--ink-primary)]">AI readiness</span>
+                        <span className="text-2xl font-bold" style={{ color }}>{s}<span className="text-sm text-[var(--ink-muted)]">/100</span></span>
+                      </div>
+                      <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-[var(--surface-3)]">
+                        <div className="h-2 rounded-full" style={{ width: `${s}%`, background: color }} />
+                      </div>
+                      <p className="mt-2 text-xs text-[var(--ink-secondary)]">{preflight.ai.verdict}</p>
+                      {preflight.ai.strengths.length > 0 && (
+                        <p className="mt-1.5 text-xs text-[var(--ink-tertiary)]"><b className="text-[var(--success)]">Strengths:</b> {preflight.ai.strengths.join(" · ")}</p>
+                      )}
+                      {preflight.ai.improvements.length > 0 && (
+                        <div className="mt-1 text-xs text-[var(--ink-tertiary)]">
+                          <b className="text-[var(--warning)]">To improve:</b>
+                          <ul className="ml-4 list-disc">{preflight.ai.improvements.map((im, i) => <li key={i}>{im}</li>)}</ul>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* Your inputs — review & edit */}
+                <div>
+                  <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--ink-tertiary)]">Your inputs</h4>
+                  <div className="divide-y divide-[var(--line-subtle)] rounded-lg border border-[var(--line-subtle)]">
+                    {preflight.inputs.map((row, i) => (
+                      <div key={i} className="flex items-center justify-between gap-3 px-3 py-1.5 text-sm">
+                        <span className="shrink-0 text-[var(--ink-tertiary)]">{row.label}</span>
+                        <span className="flex-1 truncate text-right text-[var(--ink-secondary)]">{row.value}</span>
+                        <button onClick={() => jumpTo(row.jumpStep)} className="shrink-0 text-xs text-[var(--info)] hover:underline">Edit</button>
+                      </div>
+                    ))}
                   </div>
-                ))}
-                {!preflight.ready && <p className="pt-1 text-sm font-semibold text-[var(--danger)]">❌ Resolve the blocking items above before launching.</p>}
-                {preflight.ready && preflight.hasWarnings && <p className="pt-1 text-sm text-[var(--warning)]">⚠️ Ready to launch, but review the warnings above.</p>}
-                {preflight.ready && !preflight.hasWarnings && <p className="pt-1 text-sm font-semibold text-[var(--success)]">✅ All checks passed — ready to launch.</p>}
+                </div>
+
+                {/* Marketing readiness */}
+                <PreflightCategory
+                  title="Marketing readiness"
+                  checks={preflight.checks.filter((c) => c.category === "marketing")}
+                  onJump={jumpTo}
+                />
+
+                {/* Technical */}
+                <PreflightCategory
+                  title="Technical"
+                  checks={preflight.checks.filter((c) => c.category === "technical")}
+                  onJump={jumpTo}
+                />
+
+                {/* Overall verdict */}
+                {!preflight.ready && <p className="text-sm font-semibold text-[var(--danger)]">❌ Resolve the blocking items above before launching.</p>}
+                {preflight.ready && preflight.hasWarnings && <p className="text-sm text-[var(--warning)]">⚠️ Ready to launch — review the warnings to get the most from your spend.</p>}
+                {preflight.ready && !preflight.hasWarnings && <p className="text-sm font-semibold text-[var(--success)]">✅ All checks passed — ready to launch.</p>}
               </div>
             )}
           </div>
@@ -682,6 +964,44 @@ export default function NewCampaign() {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Small indeterminate spinner for in-flight AI calls (unknown duration). */
+function Spinner() {
+  return (
+    <span
+      className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-black/30 border-t-black"
+      aria-hidden
+    />
+  );
+}
+
+interface PfCheck { item: string; ok: boolean; severity: "error" | "warning"; detail: string; jumpStep?: 1 | 2 | 3 | 4 }
+
+/** A titled group of pre-flight checks with a jump-to-fix button on failures. */
+function PreflightCategory({ title, checks, onJump }: { title: string; checks: PfCheck[]; onJump: (s: 1 | 2 | 3 | 4) => void }) {
+  if (checks.length === 0) return null;
+  return (
+    <div>
+      <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--ink-tertiary)]">{title}</h4>
+      <div className="space-y-1.5 text-sm">
+        {checks.map((c, i) => (
+          <div key={i} className="flex items-start gap-2">
+            <span className="shrink-0">{c.ok ? "✅" : c.severity === "warning" ? "⚠️" : "❌"}</span>
+            <div className="flex-1">
+              <b className={c.severity === "warning" && !c.ok ? "text-[var(--warning)]" : ""}>{c.item}</b>{" "}
+              <span className="text-[var(--ink-secondary)]">— {c.detail}</span>
+            </div>
+            {!c.ok && c.jumpStep && (
+              <button onClick={() => onJump(c.jumpStep!)} className="shrink-0 rounded border border-[var(--line-standard)] px-2 py-0.5 text-xs text-[var(--info)] hover:bg-[var(--surface-1)]">
+                Fix →
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
