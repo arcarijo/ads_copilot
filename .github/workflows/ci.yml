@@ -1,0 +1,151 @@
+name: CI — test + risk-score + red-team
+
+# Runs on every PR to main. The static security gate works with NO secrets.
+# Dynamic (authz/DAST) + k6 against the live preview are secret-gated and get
+# wired in next session (see docs/superpowers/plans/2026-07-20-deployment-pipeline-phase1.md).
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write # to post the verdict comment
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  risk:
+    runs-on: ubuntu-latest
+    outputs:
+      tier: ${{ steps.classify.outputs.tier }}
+      reason: ${{ steps.classify.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # classifier diffs against the base
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - id: classify
+        name: Classify change risk
+        env:
+          RISK_LABEL: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        # Diff against the PR's base commit (origin/<branch> isn't a reliable ref
+        # in a PR checkout). --yes fetches tsx without a full npm install.
+        run: npx --yes tsx scripts/pipeline/classify-risk.ts --base=${{ github.event.pull_request.base.sha }}
+
+  security:
+    needs: risk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+
+      # Static security pass at the classified tier. No target -> authz/dast skip
+      # cleanly; static + secrets(gitleaks) + sast(semgrep) + ssrf run via Docker
+      # (preinstalled on ubuntu runners). Non-zero exit on any FAIL fails the job.
+      - name: Red-team (static pass)
+        run: npm run redteam -- --tier=${{ needs.risk.outputs.tier }}
+
+      - name: Upload red-team report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: redteam-report
+          path: scripts/redteam/report/report-*.md
+          if-no-files-found: ignore
+
+      # Basic verdict comment. Richer formatting = Task 6 (scripts/pipeline/post-report.ts).
+      - name: Post verdict comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          report=$(ls -t scripts/redteam/report/report-*.md 2>/dev/null | head -1)
+          verdict=$(grep -m1 '^# Red-Team Report' "$report" 2>/dev/null || echo "# Red-Team Report — (no report)")
+          {
+            echo "### Pipeline result"
+            echo ""
+            echo "- **Risk tier:** T${{ needs.risk.outputs.tier }} — ${{ needs.risk.outputs.reason }}"
+            echo "- **${verdict#\# }**"
+            echo ""
+            echo "<details><summary>Red-team summary</summary>"
+            echo ""
+            echo '```'
+            sed -n '/| Check/,/^$/p' "$report" 2>/dev/null | head -20
+            echo '```'
+            echo "</details>"
+          } > comment.md
+          gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
+
+  # Resolve the Vercel PREVIEW url for this PR's commit, so the dynamic jobs can
+  # target it. Dormant until you set the repo variable ENABLE_DYNAMIC_REDTEAM
+  # (after adding the staging secrets — see docs/deploy/DEPLOYMENT.md). Uses the
+  # "-git-" branch alias, which the red-team prod-guard allowlists.
+  preview:
+    needs: risk
+    if: ${{ needs.risk.outputs.tier != '0' && vars.ENABLE_DYNAMIC_REDTEAM == 'true' }}
+    runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.resolve.outputs.url }}
+    steps:
+      - id: resolve
+        name: Wait for Vercel preview
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          sha="${{ github.event.pull_request.head.sha }}"
+          for i in $(seq 1 40); do
+            resp=$(curl -s -H "Authorization: Bearer $VERCEL_TOKEN" \
+              "https://api.vercel.com/v6/deployments?projectId=${{ vars.VERCEL_PROJECT_ID }}&teamId=${{ vars.VERCEL_TEAM_ID }}&limit=30")
+            alias=$(echo "$resp" | jq -r --arg SHA "$sha" '.deployments[] | select(.meta.githubCommitSha==$SHA and .state=="READY" and .target==null) | .meta.branchAlias' | head -1)
+            if [ -n "$alias" ] && [ "$alias" != "null" ]; then echo "url=https://$alias" >> "$GITHUB_OUTPUT"; echo "Preview: https://$alias"; exit 0; fi
+            echo "[$i] waiting for a READY preview for $sha…"; sleep 15
+          done
+          echo "::error::No READY Vercel preview found for $sha after ~10min"; exit 1
+
+  # Full dynamic red-team (authz/tenant-isolation/IDOR + ZAP/Nuclei DAST) against
+  # the live preview. Needs the staging secrets. Never touches prod (guard.ts).
+  dynamic-redteam:
+    needs: [risk, preview]
+    if: ${{ needs.risk.outputs.tier != '0' && vars.ENABLE_DYNAMIC_REDTEAM == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - name: Red-team (dynamic, vs preview)
+        env:
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          CLERK_SECRET_KEY: ${{ secrets.STAGING_CLERK_SECRET_KEY }}
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+          REDTEAM_ADMIN_EMAIL: ${{ secrets.REDTEAM_ADMIN_EMAIL }}
+          REDTEAM_MEMBER_EMAIL: ${{ secrets.REDTEAM_MEMBER_EMAIL }}
+        run: npm run redteam -- --tier=${{ needs.risk.outputs.tier }} --target=${{ needs.preview.outputs.url }}
+      - name: Upload dynamic report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: redteam-dynamic-report, path: scripts/redteam/report/report-*.md, if-no-files-found: ignore }
+
+  # k6 load test against the preview (T1+). Dormant with the same gate.
+  loadtest:
+    needs: [risk, preview]
+    if: ${{ needs.risk.outputs.tier != '0' && vars.ENABLE_DYNAMIC_REDTEAM == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: k6 load test
+        env:
+          TARGET: ${{ needs.preview.outputs.url }}
+          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: docker run --rm -e TARGET -e BYPASS -i grafana/k6 run - < load/load.js
