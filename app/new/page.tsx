@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { CopilotPlan, CreativeInput } from "@/lib/types";
 import { resolveCoverage, corridorsFor, ONTARIO_CITIES, TIER_ORDER, TIER_LABELS, type CoverageTier } from "@/lib/geoOntario";
 import { CAMPAIGN_INTENTS, INTENT_DEFS, intentApproachNudge, type CampaignIntent } from "@/lib/campaignIntent";
@@ -68,11 +68,22 @@ interface FolderCheck {
 }
 
 export default function NewCampaign() {
+  return (
+    <Suspense fallback={null}>
+      <NewCampaignForm />
+    </Suspense>
+  );
+}
+
+function NewCampaignForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const editId = searchParams.get("edit");
   const [step, setStep] = useState<Step>(1);
   const [phase, setPhase] = useState<Phase>("FORM");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadingEdit, setLoadingEdit] = useState(!!editId);
 
   // Client selection
   const [clients, setClients] = useState<ClientOption[]>([]);
@@ -217,12 +228,83 @@ export default function NewCampaign() {
     return () => clearInterval(t);
   }, [busy]);
 
+  // Resuming an existing DRAFT/NEEDS_CLARIFICATION campaign from the Monitor
+  // page's Edit button (?edit=<id>). Loads the last-submitted questionnaire
+  // from the server (not localStorage — that's a different, browser-local
+  // in-progress form) and hydrates the same fields the wizard already tracks.
+  // Geography collapses to the manual location rows: the server only stores
+  // the resolved targeting, not which coverage-ladder tier produced it.
+  useEffect(() => {
+    if (!editId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/campaigns/${editId}`);
+        const json = await res.json();
+        if (cancelled) return;
+        if (!res.ok || !json.campaign) {
+          setError("Couldn't load that draft — it may have been deleted.");
+          setLoadingEdit(false);
+          return;
+        }
+        const c = json.campaign as { clientId?: string | null; questionnaireJson?: string };
+        let q: Record<string, unknown> = {};
+        try { q = JSON.parse(c.questionnaireJson || "{}"); } catch { /* leave empty */ }
+        setCampaignId(editId);
+        if (c.clientId) setClientId(c.clientId);
+        if (typeof q.campaignIntent === "string" && (CAMPAIGN_INTENTS as string[]).includes(q.campaignIntent)) setCampaignIntent(q.campaignIntent as CampaignIntent);
+        if (typeof q.campaignName === "string") setCampaignName(q.campaignName);
+        if (typeof q.goal === "string") setGoal(q.goal);
+        if (typeof q.landingPageUrl === "string") setLandingPageUrl(q.landingPageUrl);
+        if (typeof q.targetAudience === "string") setTargetAudience(q.targetAudience);
+        if (typeof q.budgetDollars === "number") setBudgetDollars(q.budgetDollars);
+        if (q.budgetType === "DAILY" || q.budgetType === "LIFETIME") setBudgetType(q.budgetType);
+        if (typeof q.durationDays === "number") setDurationDays(q.durationDays);
+        if (typeof q.abTest === "boolean") setAbTest(q.abTest);
+        if (q.abVariable === "CREATIVE" || q.abVariable === "AUDIENCE") setAbVariable(q.abVariable);
+        if (typeof q.abNotes === "string") setAbNotes(q.abNotes);
+        if (typeof q.campaignDirective === "string") setCampaignDirective(q.campaignDirective);
+        const targeting = (q.targeting ?? {}) as Record<string, unknown>;
+        if (Array.isArray(targeting.locations) && targeting.locations.length) {
+          setHostCity(""); // collapse the coverage ladder — these rows carry the full picture now
+          setUseCorridors(false);
+          setLocations((targeting.locations as unknown[]).slice(0, 10).map((rw) => {
+            const l = (rw ?? {}) as Record<string, unknown>;
+            const r = Math.round(Number(l.radiusKm));
+            return { name: typeof l.name === "string" ? l.name : "", radiusKm: Number.isFinite(r) ? Math.min(80, Math.max(1, r)) : 15 };
+          }));
+        }
+        if (typeof targeting.ageMin === "number") setAgeMin(String(targeting.ageMin));
+        if (typeof targeting.ageMax === "number") setAgeMax(String(targeting.ageMax));
+        if (targeting.gender === "MALE" || targeting.gender === "FEMALE" || targeting.gender === "ALL") setGender(targeting.gender);
+        if (Array.isArray(q.creatives) && q.creatives.length) {
+          setCreatives((q.creatives as unknown[]).slice(0, 10).map((rw, i) => {
+            const cr = (rw ?? {}) as Record<string, unknown>;
+            const kind = cr.kind === "CAROUSEL" || cr.kind === "VIDEO" ? cr.kind : "IMAGE";
+            return {
+              kind: kind as CreativeInput["kind"],
+              label: `Creative ${String.fromCharCode(65 + i)}`,
+              filePaths: Array.isArray(cr.filePaths) ? ((cr.filePaths as unknown[]).filter((x) => typeof x === "string") as string[]) : [""],
+              primaryText: typeof cr.primaryText === "string" ? cr.primaryText : "",
+              headline: typeof cr.headline === "string" ? cr.headline : "",
+              linkUrl: typeof cr.linkUrl === "string" ? cr.linkUrl : "",
+            };
+          }));
+        }
+      } catch {
+        if (!cancelled) setError("Couldn't load that draft. Try again.");
+      }
+      if (!cancelled) { setLoadingEdit(false); setDraftRestoreDone(true); }
+    })();
+    return () => { cancelled = true; };
+  }, [editId]);
+
   // Restore a saved draft once, as soon as we know which user this is. Shapes
   // from storage are defensively coerced so a tampered/corrupt draft can only
   // repopulate the form (never crash it), and everything is re-validated
   // server-side on submit.
   useEffect(() => {
-    if (!draftKey || draftRestoreDone) return;
+    if (!draftKey || draftRestoreDone || editId) return;
     try {
       const raw = localStorage.getItem(draftKey);
       if (raw) {
@@ -451,9 +533,26 @@ export default function NewCampaign() {
 
   const steps = ["Basics", "Audience", "Budget & Schedule", "Creatives & A/B"];
 
+  if (loadingEdit) {
+    return (
+      <div className="mx-auto max-w-2xl space-y-6">
+        <h1 className="text-2xl font-semibold">New Campaign</h1>
+        <div className="flex items-center gap-2 rounded-xl border border-[var(--line-standard)] bg-[var(--surface-1)] p-4 text-sm text-[var(--ink-secondary)]">
+          <Spinner /> Loading your draft…
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`mx-auto ${phase === "FORM" && step === 4 ? "max-w-4xl" : "max-w-2xl"} space-y-6`}>
       <h1 className="text-2xl font-semibold">New Campaign</h1>
+
+      {editId && !error && (
+        <div className="rounded-xl border border-[var(--warning)] bg-[var(--warning-wash)] p-3 text-sm text-[var(--ink-primary)]">
+          ↩ Continuing your saved draft — pick up where you left off.
+        </div>
+      )}
 
       {error && (
         <div className="rounded-xl border border-[var(--line-standard)] bg-[var(--danger-wash)] p-4 text-sm text-[var(--danger)]">{error}</div>
