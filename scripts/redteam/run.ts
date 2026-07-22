@@ -78,28 +78,22 @@ async function main() {
   console.log(`\n▶ ${TIER_LABEL[tier]} — target: ${target || "(static only)"}`);
   console.log(`  checks: ${checkNames.join(", ")}\n`);
 
-  // Fixtures only when a check that consumes them is scheduled AND we have a target.
+  // Fixtures (incl. Clerk session tokens, which expire in ~60s) are minted
+  // just-in-time, immediately before the authz check runs — not upfront —
+  // so slower preceding checks (sast can take 100s+) can't let them expire.
   let fixtures: Fixtures | undefined;
-  if (checkNames.includes("authz") && target) {
-    try {
-      console.log("  setting up fixtures (staging tenants + Clerk sessions)…");
-      fixtures = await setupFixtures();
-    } catch (e) {
-      console.warn(`  ⚠ fixtures unavailable — authz will be skipped: ${(e as Error).message}`);
-    }
-  }
 
   const ctx: RunContext = {
     tier,
     target,
     repoRoot,
     bypassSecret: process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
-    adminToken: fixtures?.adminToken,
-    adminUserId: fixtures?.adminUserId,
-    memberToken: fixtures?.memberToken,
-    memberUserId: fixtures?.memberUserId,
-    memberClientId: fixtures?.memberClientId,
-    otherClientId: fixtures?.otherClientId,
+    adminToken: undefined,
+    adminUserId: undefined,
+    memberToken: undefined,
+    memberUserId: undefined,
+    memberClientId: undefined,
+    otherClientId: undefined,
   };
 
   const results: CheckResult[] = [];
@@ -112,6 +106,20 @@ async function main() {
         durationMs: 0,
       });
       continue;
+    }
+    if (name === "authz" && target) {
+      try {
+        console.log("  setting up fixtures (staging tenants + Clerk sessions)…");
+        fixtures = await setupFixtures();
+        ctx.adminToken = fixtures.adminToken;
+        ctx.adminUserId = fixtures.adminUserId;
+        ctx.memberToken = fixtures.memberToken;
+        ctx.memberUserId = fixtures.memberUserId;
+        ctx.memberClientId = fixtures.memberClientId;
+        ctx.otherClientId = fixtures.otherClientId;
+      } catch (e) {
+        console.warn(`  ⚠ fixtures unavailable — authz will be skipped: ${(e as Error).message}`);
+      }
     }
     console.log(`  ▸ running ${name}…`);
     try {

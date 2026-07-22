@@ -20,7 +20,9 @@ function zapHeaderOpts(secret: string): string {
     `replacer.full_list(0).matchstr=${BYPASS_HEADER}`,
     `replacer.full_list(0).regex=false`,
     `replacer.full_list(0).replacement=${secret}`,
-  ].join(" ");
+  ]
+    .map((opt) => `-config ${opt}`)
+    .join(" ");
 }
 
 function classifyZap(code: number, label: string): Finding {

@@ -59,6 +59,16 @@ const CITY_INDEX: Record<string, OntarioCity> = Object.fromEntries(
   ONTARIO_CITIES.map((c) => [c.name.toLowerCase(), c]),
 );
 
+/**
+ * Normalize a user-typed city to a match key. The city input suggests values
+ * like "Toronto, ON", and users often type the province — so match on the part
+ * before the first comma. Without this, "Toronto, ON" fails to match "Toronto"
+ * and the app wrongly reports the city as off-transit / unknown size.
+ */
+export function cityKey(name: string): string {
+  return (name ?? "").split(",")[0].trim().toLowerCase();
+}
+
 // GO Transit corridors — used for "city + nearby" so local events can pull
 // audiences along the transit lines people actually commute on.
 export const GO_CORRIDORS: Record<string, string[]> = {
@@ -101,12 +111,12 @@ export interface CoverageResolution {
 }
 
 export function citySize(name: string): CitySize | null {
-  return CITY_INDEX[name.trim().toLowerCase()]?.size ?? null;
+  return CITY_INDEX[cityKey(name)]?.size ?? null;
 }
 
 /** GO corridors the host city sits on. */
 export function corridorsFor(city: string): string[] {
-  const key = city.trim().toLowerCase();
+  const key = cityKey(city);
   return Object.entries(GO_CORRIDORS)
     .filter(([, towns]) => towns.some((t) => t.toLowerCase() === key))
     .map(([line]) => line);
@@ -132,7 +142,9 @@ export function resolveCoverage(
   tier: CoverageTier,
   useCorridors = true,
 ): CoverageResolution {
-  const hostCity = hostCityRaw.trim();
+  // Strip any province/country suffix ("Milton, ON" → "Milton") so location
+  // names handed to Meta are clean and corridor de-dup compares correctly.
+  const hostCity = hostCityRaw.split(",")[0].trim();
   const size = citySize(hostCity);
   const hints: string[] = [];
   let locations: ResolvedLocation[] = [];
