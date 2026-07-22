@@ -14,6 +14,12 @@ export const metadata: Metadata = {
   description: "Puts promoting power in the hands of studio & venue owners — AI runs the day-to-day, you steer with what you know.",
 };
 
+// Vercel sets these at build time — no config needed, and they're read
+// server-side here so the SHA never has to be exposed as a NEXT_PUBLIC_ var.
+const commitSha = process.env.VERCEL_GIT_COMMIT_SHA;
+const commitMessage = process.env.VERCEL_GIT_COMMIT_MESSAGE;
+const deployEnv = process.env.VERCEL_ENV;
+
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   const admin = session?.role === "admin";
@@ -72,6 +78,15 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                       <Icon name="plus" size="1rem" className="icon-spin-hover" />
                       New Campaign
                     </Link>
+                    {admin && commitSha && (
+                      <span
+                        title={`${deployEnv ?? "local"}${commitMessage ? ` — ${commitMessage}` : ""}`}
+                        className="ml-1 rounded-[var(--radius-sm)] px-2 py-1 font-mono text-xs"
+                        style={{ background: "rgba(26,15,8,0.12)", color: "rgba(26,15,8,0.7)" }}
+                      >
+                        {commitSha.slice(0, 7)}
+                      </span>
+                    )}
                     <div className="ml-1 flex items-center">
                       <UserButton />
                     </div>

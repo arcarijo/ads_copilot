@@ -18,7 +18,7 @@ const STATUS: Record<string, { label: string; wash: string; dot: string }> = {
   ACTIVE: { label: "Active", wash: "var(--success-wash)", dot: "var(--success)" },
   READY: { label: "Ready", wash: "var(--info-wash)", dot: "var(--info)" },
   NEEDS_CLARIFICATION: { label: "Needs input", wash: "var(--warning-wash)", dot: "var(--warning)" },
-  DRAFT: { label: "Draft", wash: "var(--surface-3)", dot: "var(--ink-muted)" },
+  DRAFT: { label: "Draft", wash: "var(--warning-wash)", dot: "var(--warning)" },
   PAUSED: { label: "Paused", wash: "var(--warning-wash)", dot: "var(--warning)" },
   STOPPED: { label: "Stopped", wash: "var(--danger-wash)", dot: "var(--danger)" },
   ERROR: { label: "Error", wash: "var(--danger-wash)", dot: "var(--danger)" },
@@ -182,7 +182,12 @@ export default async function Dashboard() {
                 <div
                   key={c.id}
                   className="rise-in lift grid grid-cols-2 items-center gap-3 rounded-[var(--radius-md)] p-4 sm:grid-cols-6"
-                  style={stagger(i + 4, { background: "var(--surface-1)", border: "1px solid var(--line-subtle)" })}
+                  style={stagger(
+                    i + 4,
+                    c.status === "DRAFT"
+                      ? { background: "var(--warning-wash)", border: "1px solid rgba(251,191,36,0.3)" }
+                      : { background: "var(--surface-1)", border: "1px solid var(--line-subtle)" },
+                  )}
                 >
                   <div className="col-span-2 sm:col-span-2">
                     <Link
@@ -211,6 +216,14 @@ export default async function Dashboard() {
                     </div>
                   </div>
                   <div className="flex justify-end">
+                    {c.status === "DRAFT" && (
+                      <Link
+                        href={`/new?edit=${c.id}`}
+                        className="rounded-[var(--radius-sm)] border border-[var(--warning)] px-3 py-1.5 text-xs font-semibold text-[var(--ink-primary)] transition-colors hover:bg-[rgba(251,191,36,0.18)]"
+                      >
+                        Edit
+                      </Link>
+                    )}
                     {(c.status === "ACTIVE" || c.status === "LAUNCHING") && <StopButton campaignId={c.id} />}
                   </div>
                 </div>
