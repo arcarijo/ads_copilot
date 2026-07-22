@@ -16,11 +16,7 @@ feat/* branch → open PR to main
    → Vercel builds main → production (atomic; old prod stays live until READY)
 ```
 
-Merge = approval. **Note the honest limitation:** on a *private* repo, GitHub's free tier offers neither required reviewers nor required status checks — so CI cannot mechanically block a merge. What it does is post a loud, unmissable GO/NO-GO comment on every PR; the discipline rule is **never merge a PR whose `security` check isn't green**, and the sole human merger is the gate. To make the gate *mechanical* (free options):
-
-- **Make the repo public** — no secrets live in git (enforced by `.gitignore` + `.env.example`), and public repos get free branch-protection/rulesets *and* unlimited Actions minutes. Then add a ruleset requiring the `risk` + `security` checks before merge to `main`.
-- **or** keep it private on **GitHub Pro** (~$4/mo) for the same required-checks feature.
-- **or** keep the discipline gate (current state) — fine while one trusted person merges.
+Merge = approval, and it's now **mechanically enforced**: the repo is public (verified clean full-history secret scan first — no secrets ever entered git), and a repository ruleset (`main-require-ci-checks`, id `19570245`) requires the `risk` and `security` status checks to pass before any merge to `main`, with `current_user_can_bypass: never` — even the owner can't merge around a red check. GitHub Actions is also unlimited-minutes on public repos.
 
 ## Risk tiers
 
