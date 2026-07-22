@@ -23,10 +23,10 @@ jobs:
       tier: ${{ steps.classify.outputs.tier }}
       reason: ${{ steps.classify.outputs.reason }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # classifier diffs against the base
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - id: classify
@@ -41,10 +41,10 @@ jobs:
     needs: risk
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -58,7 +58,7 @@ jobs:
 
       - name: Upload red-team report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: redteam-report
           path: scripts/redteam/report/report-*.md
@@ -120,8 +120,8 @@ jobs:
     if: ${{ needs.risk.outputs.tier != '0' && vars.ENABLE_DYNAMIC_REDTEAM == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version: 24, cache: npm }
       - run: npm ci
       - name: Red-team (dynamic, vs preview)
@@ -134,7 +134,7 @@ jobs:
         run: npm run redteam -- --tier=${{ needs.risk.outputs.tier }} --target=${{ needs.preview.outputs.url }}
       - name: Upload dynamic report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with: { name: redteam-dynamic-report, path: scripts/redteam/report/report-*.md, if-no-files-found: ignore }
 
   # k6 load test against the preview (T1+). Dormant with the same gate.
@@ -143,7 +143,7 @@ jobs:
     if: ${{ needs.risk.outputs.tier != '0' && vars.ENABLE_DYNAMIC_REDTEAM == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: k6 load test
         env:
           TARGET: ${{ needs.preview.outputs.url }}
