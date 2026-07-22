@@ -12,9 +12,9 @@ export interface NormalizedMedia {
 function driveFileId(v: string): string | null {
   if (!/^https?:\/\/(drive|docs)\.google\.com\//i.test(v)) return null;
   const m =
-    v.match(/\/file\/d\/([A-Za-z0-9_-]{10,})/) ||
-    v.match(/[?&]id=([A-Za-z0-9_-]{10,})/) ||
-    v.match(/\/d\/([A-Za-z0-9_-]{10,})/);
+    v.match(/\/file\/d\/([A-Za-z0-9_-]{10,100})/) ||
+    v.match(/[?&]id=([A-Za-z0-9_-]{10,100})/) ||
+    v.match(/\/d\/([A-Za-z0-9_-]{10,100})/);
   return m ? m[1] : null;
 }
 
@@ -62,7 +62,7 @@ export const CAROUSEL_MAX = 10;
 export function extractDriveFolderId(v: string): string | null {
   const s = (v ?? "").trim();
   if (!/^https?:\/\/(drive|docs)\.google\.com\//i.test(s)) return null;
-  const m = s.match(/\/folders\/([A-Za-z0-9_-]{10,})/);
+  const m = s.match(/\/folders\/([A-Za-z0-9_-]{10,100})/);
   return m ? m[1] : null;
 }
 
@@ -103,7 +103,7 @@ export function interpretFolderListing(files: DriveFile[], min = CAROUSEL_MIN, m
  * Throws if the key isn't configured; returns a validated FolderImages otherwise.
  */
 export async function listDriveFolderImages(folderId: string, min = CAROUSEL_MIN, max = CAROUSEL_MAX): Promise<FolderImages> {
-  if (!/^[A-Za-z0-9_-]{10,}$/.test(folderId)) {
+  if (!/^[A-Za-z0-9_-]{10,100}$/.test(folderId)) {
     return { ok: false, count: 0, images: [], error: "That doesn't look like a valid Drive folder link." };
   }
   const key = process.env.GOOGLE_DRIVE_API_KEY;

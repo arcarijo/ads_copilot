@@ -26,6 +26,18 @@ The public marketing landing page lives at `app/login/page.tsx` (shown to every 
 - Keep it on the committed design system (dark warm-charcoal cockpit, coral = AI voice, plum = human voice, coral→plum hero gradient, Sora + Plus Jakarta Sans, branded `Icon` components — never emojis). Follow the impeccable skill for any redesign.
 - Keep claims accurate: describe mechanisms, never leak secrets, and don't advertise capabilities that aren't actually live (use the "Live / Soon" pattern already established for platforms).
 
+## Security & Readiness Bible (mandatory before shipping)
+
+`docs/redteam/PREFLIGHT.md` is the authoritative security readiness checklist for this project — the "security and readiness bible." It is distinct from the generic "Built-in Enforcement (The Pre-Flight Principle)" verification step in section 6 below, which is about re-checking output against instructions in general, not security specifically.
+
+**Before opening a PR or shipping any change that touches an API route, data flow, auth, or an external integration**, you must:
+1. **Read `docs/redteam/PREFLIGHT.md`** and walk its checklist against the diff.
+2. **Assess and state the risk tier** — T0, T1, or T2 — per the tier table in that file, and run the corresponding `npm run redteam:*` cycle (`redteam:preflight` / `redteam:standard` / `redteam:full`). When unsure, round up a tier.
+3. **Work through the security risk-factor rows** (resource consumption / rate limiting, regex bounding, authz/tenant isolation, SSRF, prompt injection, error disclosure, secrets handling, dangerous DOM/eval sinks) and the **compliance considerations** (PII minimization, third-party ToS/data sharing, quota/cost exposure, retention) in that file — check each off or give a one-line reason it doesn't apply.
+4. Only report a change as ready to ship after this checklist and the tier-appropriate automated cycle both pass.
+
+This applies on top of, not instead of, the existing `docs/redteam/REDTEAM.md` reference and the `redteam` skill.
+
 ## 1\. The Session-Start Protocol
 
 At the beginning of any task-oriented session, you must establish context and activate your observation layer before beginning work.

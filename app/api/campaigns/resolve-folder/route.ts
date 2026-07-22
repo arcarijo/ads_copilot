@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireSession } from "@/lib/auth";
 import { extractDriveFolderId, listDriveFolderImages } from "@/lib/drive";
+import { aiRateLimited } from "@/lib/rateLimit";
 
 /**
  * Preview a Google Drive folder link for a carousel: validate it's a folder,
@@ -11,6 +12,12 @@ import { extractDriveFolderId, listDriveFolderImages } from "@/lib/drive";
 export async function POST(req: NextRequest) {
   const auth = await requireSession();
   if (auth.response) return auth.response;
+
+  // Every call hits the shared Drive API key's quota, same as the AI-backed
+  // routes hit the shared Cloudflare quota — throttle it the same way.
+  if (aiRateLimited(auth.session, req.headers)) {
+    return NextResponse.json({ ok: false, error: "Too many folder checks — please wait a moment and try again." }, { status: 429 });
+  }
 
   const body = (await req.json().catch(() => ({}))) as { url?: unknown };
   const url = typeof body.url === "string" ? body.url : "";
