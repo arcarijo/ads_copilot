@@ -9,6 +9,7 @@ import {
 import { CopilotPlan, CreativeInput } from "./types";
 import { rateReadiness, type AiReadiness } from "./readiness";
 import { isSafePublicUrl } from "./urlSafety";
+import { isLaunchEligibleStatus } from "./campaignStatus";
 
 // Form step a check/input maps to, so the UI can offer a jump-to-field button.
 export type JumpStep = 1 | 2 | 3 | 4;
@@ -117,8 +118,14 @@ export async function preflightCampaign(
   if (campaign.directive) inputs.push({ label: "Campaign directive", value: truncate(campaign.directive, 90), jumpStep: 4 });
 
   // ---------------- Technical ----------------
-  add("Campaign status", campaign.status === "READY", "error", "technical",
-    campaign.status === "READY" ? "Copilot-approved and ready." : `Status is ${campaign.status}. Must be READY to launch.`);
+  // ERROR is launch-eligible: a failed launch leaves the approved plan intact,
+  // so the user can retry once the cause is fixed. See lib/campaignStatus.ts.
+  add("Campaign status", isLaunchEligibleStatus(campaign.status), "error", "technical",
+    campaign.status === "READY"
+      ? "Copilot-approved and ready."
+      : campaign.status === "ERROR"
+        ? "A previous launch attempt failed — the approved plan is unchanged, so you can retry once the flagged cause is resolved."
+        : `Status is ${campaign.status}. Must be READY to launch.`);
   add("AI plan", Boolean(plan), "error", "technical", plan ? "Approved plan attached." : "No approved AI plan — run the Copilot review first.");
 
   // ---------------- Marketing readiness ----------------
