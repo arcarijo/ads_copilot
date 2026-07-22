@@ -294,8 +294,11 @@ export interface VerifyCheck {
 }
 
 /**
- * Read-only readiness probe used by the onboarding form: token validity,
- * ad account status, funding source, and page access. Never mutates anything.
+ * Readiness probe used by the onboarding form and preflight: token validity,
+ * ad account status, funding source, Page access, Instagram access, and a
+ * validate_only write-permission check. Nothing is ever persisted to Meta —
+ * the campaign-create probe uses execution_options: ["validate_only"], which
+ * runs full permission enforcement without creating anything.
  */
 export async function verifyCredentials(creds: MetaCreds): Promise<{ ready: boolean; checks: VerifyCheck[] }> {
   const checks: VerifyCheck[] = [];
@@ -337,14 +340,55 @@ export async function verifyCredentials(creds: MetaCreds): Promise<{ ready: bool
 
   if (creds.pageId) {
     try {
-      const page = await metaFetch<{ name?: string }>(creds, creds.pageId, { params: { fields: "name" } });
+      const page = await metaFetch<{ name?: string; instagram_business_account?: { id: string } }>(creds, creds.pageId, {
+        params: { fields: "name,instagram_business_account" },
+      });
       checks.push({ item: "Facebook Page access", ok: true, detail: `Page "${page.name}" reachable with this token.` });
+
+      // A Page can have Instagram placements without the token having access to
+      // that IG account specifically — Page access alone does not imply this,
+      // and was the exact gap that let a client's launch fail after "VERIFIED".
+      const igId = page.instagram_business_account?.id;
+      if (igId) {
+        try {
+          const ig = await metaFetch<{ username?: string }>(creds, igId, { params: { fields: "username" } });
+          checks.push({ item: "Instagram account access", ok: true, detail: `Instagram @${ig.username ?? "account"} reachable — ads can publish to Instagram placements.` });
+        } catch (err) {
+          const m = err instanceof MetaApiError ? err.humanMessage : (err as Error).message;
+          checks.push({
+            item: "Instagram account access",
+            ok: false,
+            detail: `This Page has a linked Instagram account, but the token can't access it: ${m}. In Meta Business Settings, grant the system user access under Accounts → Instagram accounts (Page access alone does not cover it).`,
+          });
+        }
+      }
     } catch (err) {
       const m = err instanceof MetaApiError ? err.humanMessage : (err as Error).message;
       checks.push({ item: "Facebook Page access", ok: false, detail: m });
     }
   } else {
     checks.push({ item: "Facebook Page access", ok: false, detail: "No Page ID provided." });
+  }
+
+  // Live write-permission probe. The checks above are all read-only GETs and
+  // succeed even when the token lacks ads_management — validate_only runs the
+  // ad account through the same permission enforcement a real launch does,
+  // without creating anything, so a missing/partial grant surfaces here
+  // instead of only at "Approve & Launch".
+  try {
+    await metaFetch<{ id?: string; success?: boolean }>(creds, `act_${creds.accountId}/campaigns`, {
+      body: {
+        name: "Copilot readiness check (validate only — nothing is created)",
+        objective: "OUTCOME_TRAFFIC",
+        status: "PAUSED",
+        special_ad_categories: [],
+        execution_options: ["validate_only"],
+      },
+    });
+    checks.push({ item: "Ad creation permission", ok: true, detail: "Token can create campaigns on this ad account (validated only — nothing was created)." });
+  } catch (err) {
+    const m = err instanceof MetaApiError ? err.humanMessage : (err as Error).message;
+    checks.push({ item: "Ad creation permission", ok: false, detail: `Token cannot create ads on this account: ${m}` });
   }
 
   return { ready: checks.every((c) => c.ok), checks };

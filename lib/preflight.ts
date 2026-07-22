@@ -194,7 +194,7 @@ export async function preflightCampaign(
     add("Facebook Page", Boolean(pageId), "error", "technical", pageId ? `Publishing from Page ${pageId}.` : "No Page ID available for this campaign.");
   }
 
-  // Live Meta credential probe (read-only, technical).
+  // Live Meta credential probe (validate_only — nothing is created; technical).
   try {
     const creds = campaign.client ? credsFromClient(campaign.client) : envCreds();
     const v = await verifyCredentials(creds);
