@@ -1,17 +1,31 @@
+import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { StopButton } from "@/app/components/StopButton";
+import { DeleteCampaignButton } from "@/app/components/DeleteCampaignButton";
 import { DirectiveEditor } from "./DirectiveEditor";
 import type { CopilotPlan } from "@/lib/types";
 import { getSession, canAccessCampaign } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
+// See the matching comment in app/page.tsx — same not-launched/launched split.
+const NOT_LAUNCHED_STATUSES = ["DRAFT", "NEEDS_CLARIFICATION", "READY"];
+
+// Internal log source codes aren't meaningful to clients — "CRON" in
+// particular reads as an unexplained system term. Admins keep the raw code
+// for debugging; everyone else gets the plain-language equivalent.
+function sourceLabel(source: string, admin: boolean): string {
+  if (admin) return source;
+  return source === "CRON" ? "Automatic check" : source;
+}
+
 export default async function CampaignDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const session = await getSession();
   if (!session) redirect("/login");
   if (!(await canAccessCampaign(session, id))) notFound();
+  const admin = session.role === "admin";
   const campaign = await prisma.campaign.findUnique({
     where: { id },
     include: {
@@ -36,9 +50,28 @@ export default async function CampaignDetail({ params }: { params: Promise<{ id:
           </p>
           {campaign.lastError && <p className="mt-2 text-sm text-[var(--danger)]">⚠️ {campaign.lastError}</p>}
         </div>
-        {(campaign.status === "ACTIVE" || campaign.status === "LAUNCHING") && (
-          <StopButton campaignId={campaign.id} large />
-        )}
+        <div className="flex flex-wrap items-start justify-end gap-2">
+          {NOT_LAUNCHED_STATUSES.includes(campaign.status) && (
+            <>
+              <Link
+                href={`/new?edit=${campaign.id}`}
+                className="rounded-lg border border-[var(--warning)] px-4 py-2 text-sm font-semibold text-[var(--ink-primary)] transition-colors hover:bg-[rgba(251,191,36,0.18)]"
+              >
+                Edit
+              </Link>
+              <Link
+                href={`/new?edit=${campaign.id}&fresh=1`}
+                className="rounded-lg border border-[var(--line-standard)] px-4 py-2 text-sm font-semibold text-[var(--ink-secondary)] transition-colors hover:bg-[var(--surface-2)]"
+              >
+                Start over
+              </Link>
+              <DeleteCampaignButton campaignId={campaign.id} large />
+            </>
+          )}
+          {(campaign.status === "ACTIVE" || campaign.status === "LAUNCHING") && (
+            <StopButton campaignId={campaign.id} large />
+          )}
+        </div>
       </div>
 
       {plan && (
@@ -62,7 +95,7 @@ export default async function CampaignDetail({ params }: { params: Promise<{ id:
       <section>
         <h2 className="mb-3 text-lg font-medium text-[var(--ink-primary)]">Daily Analytics</h2>
         {campaign.snapshots.length === 0 ? (
-          <p className="text-sm text-[var(--ink-muted)]">No data yet — the daily cron populates this after the first cycle.</p>
+          <p className="text-sm text-[var(--ink-muted)]">No data yet — the automatic ad checks populate this after the first cycle.</p>
         ) : (
           <div className="overflow-x-auto rounded-xl border border-[var(--line-subtle)]">
             <table className="w-full text-sm">
@@ -98,7 +131,7 @@ export default async function CampaignDetail({ params }: { params: Promise<{ id:
             <div key={l.id} className="flex gap-3 rounded-lg bg-[var(--surface-1)] px-3 py-2">
               <span className="shrink-0 text-xs text-[var(--ink-muted)]">{l.createdAt.toISOString().slice(0, 16).replace("T", " ")}</span>
               <span className={`shrink-0 text-xs font-medium ${l.level === "ERROR" ? "text-[var(--danger)]" : l.level === "WARN" ? "text-[var(--warning)]" : "text-[var(--ink-tertiary)]"}`}>
-                [{l.source}]
+                [{sourceLabel(l.source, admin)}]
               </span>
               <span className="text-[var(--ink-primary)]">{l.message}</span>
             </div>

@@ -51,3 +51,25 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   await log("UI", `Campaign "${campaign.name}" directive/notes updated.`);
   return NextResponse.json({ ok: true });
 }
+
+// Campaigns that have ever gone live carry real ad-platform state (and spend
+// history) — those can only be stopped, never deleted. Everything before that
+// point is disposable.
+const NOT_LAUNCHED_STATUSES = ["DRAFT", "NEEDS_CLARIFICATION", "READY"];
+
+export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireSession();
+  if (auth.response) return auth.response;
+  const { id } = await params;
+  if (!(await canAccessCampaign(auth.session, id))) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+  const campaign = await prisma.campaign.findUnique({ where: { id } });
+  if (!campaign) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!NOT_LAUNCHED_STATUSES.includes(campaign.status)) {
+    return NextResponse.json({ error: "This campaign has already launched — stop it instead of deleting it." }, { status: 409 });
+  }
+  await prisma.campaign.delete({ where: { id } });
+  await log("UI", `Campaign "${campaign.name}" deleted before launch.`);
+  return NextResponse.json({ ok: true });
+}

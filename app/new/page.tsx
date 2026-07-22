@@ -79,6 +79,7 @@ function NewCampaignForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const editId = searchParams.get("edit");
+  const startFresh = searchParams.get("fresh") === "1";
   const [step, setStep] = useState<Step>(1);
   const [phase, setPhase] = useState<Phase>("FORM");
   const [busy, setBusy] = useState(false);
@@ -228,12 +229,15 @@ function NewCampaignForm() {
     return () => clearInterval(t);
   }, [busy]);
 
-  // Resuming an existing DRAFT/NEEDS_CLARIFICATION campaign from the Monitor
-  // page's Edit button (?edit=<id>). Loads the last-submitted questionnaire
-  // from the server (not localStorage — that's a different, browser-local
-  // in-progress form) and hydrates the same fields the wizard already tracks.
-  // Geography collapses to the manual location rows: the server only stores
-  // the resolved targeting, not which coverage-ladder tier produced it.
+  // Resuming an existing not-yet-launched campaign from the Monitor page's
+  // Edit button (?edit=<id>). Loads the last-submitted questionnaire from the
+  // server (not localStorage — that's a different, browser-local in-progress
+  // form) and hydrates the same fields the wizard already tracks. Geography
+  // collapses to the manual location rows: the server only stores the
+  // resolved targeting, not which coverage-ladder tier produced it.
+  // "Start over" (?edit=<id>&fresh=1) reuses the same campaign row — so the
+  // relaunch updates it instead of creating a duplicate — but skips
+  // re-hydrating the old answers, leaving the form blank to redo from scratch.
   useEffect(() => {
     if (!editId) return;
     let cancelled = false;
@@ -248,10 +252,15 @@ function NewCampaignForm() {
           return;
         }
         const c = json.campaign as { clientId?: string | null; questionnaireJson?: string };
-        let q: Record<string, unknown> = {};
-        try { q = JSON.parse(c.questionnaireJson || "{}"); } catch { /* leave empty */ }
         setCampaignId(editId);
         if (c.clientId) setClientId(c.clientId);
+        if (startFresh) {
+          setLoadingEdit(false);
+          setDraftRestoreDone(true);
+          return;
+        }
+        let q: Record<string, unknown> = {};
+        try { q = JSON.parse(c.questionnaireJson || "{}"); } catch { /* leave empty */ }
         if (typeof q.campaignIntent === "string" && (CAMPAIGN_INTENTS as string[]).includes(q.campaignIntent)) setCampaignIntent(q.campaignIntent as CampaignIntent);
         if (typeof q.campaignName === "string") setCampaignName(q.campaignName);
         if (typeof q.goal === "string") setGoal(q.goal);
@@ -297,7 +306,7 @@ function NewCampaignForm() {
       if (!cancelled) { setLoadingEdit(false); setDraftRestoreDone(true); }
     })();
     return () => { cancelled = true; };
-  }, [editId]);
+  }, [editId, startFresh]);
 
   // Restore a saved draft once, as soon as we know which user this is. Shapes
   // from storage are defensively coerced so a tampered/corrupt draft can only
@@ -550,7 +559,9 @@ function NewCampaignForm() {
 
       {editId && !error && (
         <div className="rounded-xl border border-[var(--warning)] bg-[var(--warning-wash)] p-3 text-sm text-[var(--ink-primary)]">
-          ↩ Continuing your saved draft — pick up where you left off.
+          {startFresh
+            ? "↺ Starting over on this campaign — your previous answers were cleared, but relaunching will update the same campaign."
+            : "↩ Continuing your saved draft — pick up where you left off."}
         </div>
       )}
 

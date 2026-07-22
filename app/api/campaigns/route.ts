@@ -8,6 +8,9 @@ import { aiRateLimited } from "@/lib/rateLimit";
 import { sanitizeCampaignInput } from "@/lib/sanitize";
 import { validateTargeting } from "@/lib/targeting";
 
+// See the matching comment in app/page.tsx — same not-launched/launched split.
+const NOT_LAUNCHED_STATUSES = ["DRAFT", "NEEDS_CLARIFICATION", "READY"];
+
 export async function GET() {
   const auth = await requireSession();
   if (auth.response) return auth.response;
@@ -77,25 +80,35 @@ export async function POST(req: NextRequest) {
     const budgetCents = cv.budgetCents;
     const directive = cv.campaignDirective;
     const abNotes = cv.abNotes;
-    const campaign = input.campaignId
-      ? await prisma.campaign.findUniqueOrThrow({ where: { id: input.campaignId } })
-      : await prisma.campaign.create({
-          data: {
-            clientId: input.clientId || null,
-            name: input.campaignName,
-            budgetCents,
-            budgetType: input.budgetType,
-            durationDays: input.durationDays,
-            questionnaireJson: JSON.stringify(input),
-            audienceJson: JSON.stringify({ targetAudience: input.targetAudience, geography: input.geography }),
-            creativesJson: JSON.stringify(input.creatives),
-            abTest: input.abTest,
-            abVariable: input.abVariable,
-            abNotes: abNotes || null,
-            directive: directive || null,
-            directiveAt: directive ? new Date() : null,
-          },
-        });
+    const campaignData = {
+      clientId: input.clientId || null,
+      name: input.campaignName,
+      budgetCents,
+      budgetType: input.budgetType,
+      durationDays: input.durationDays,
+      questionnaireJson: JSON.stringify(input),
+      audienceJson: JSON.stringify({ targetAudience: input.targetAudience, geography: input.geography }),
+      creativesJson: JSON.stringify(input.creatives),
+      abTest: input.abTest,
+      abVariable: input.abVariable,
+      abNotes: abNotes || null,
+      directive: directive || null,
+      directiveAt: directive ? new Date() : null,
+    };
+
+    let campaign;
+    if (input.campaignId) {
+      const existing = await prisma.campaign.findUniqueOrThrow({ where: { id: input.campaignId } });
+      // Editing/relaunching only ever touches campaigns that haven't gone live —
+      // once real ad-platform spend exists the questionnaire can no longer
+      // silently rewrite budget/creatives/targeting underneath it.
+      if (!NOT_LAUNCHED_STATUSES.includes(existing.status)) {
+        return NextResponse.json({ error: "This campaign has already launched and can no longer be edited." }, { status: 409 });
+      }
+      campaign = await prisma.campaign.update({ where: { id: existing.id }, data: campaignData });
+    } else {
+      campaign = await prisma.campaign.create({ data: campaignData });
+    }
 
     const result = await runCopilot(input);
 

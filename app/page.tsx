@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { CSSProperties } from "react";
 import { prisma } from "@/lib/db";
 import { StopButton } from "./components/StopButton";
+import { DeleteCampaignButton } from "./components/DeleteCampaignButton";
 import { AlertBanner } from "./components/AlertBanner";
 import { CapacityBar } from "./components/CapacityBar";
 import { Icon } from "./components/Icon";
@@ -11,6 +12,12 @@ import { redirect } from "next/navigation";
 
 // Stagger helper: sets the --i custom prop the .rise-in keyframe reads.
 const stagger = (i: number, extra?: CSSProperties): CSSProperties => ({ ["--i" as string]: i, ...extra } as CSSProperties);
+
+// Once a campaign has ever gone live it carries real ad-platform state (spend,
+// a Meta campaign ID) — only its directive can be tuned from then on, and it
+// can be stopped but never rebuilt or deleted. Everything before that point
+// is still just a plan, so it's fully editable/discardable.
+const NOT_LAUNCHED_STATUSES = ["DRAFT", "NEEDS_CLARIFICATION", "READY"];
 
 export const dynamic = "force-dynamic";
 
@@ -215,14 +222,23 @@ export default async function Dashboard() {
                       {s ? `${s.ctr.toFixed(2)}%` : "—"} · {s?.cpaCents ? `$${(s.cpaCents / 100).toFixed(2)}` : "—"}
                     </div>
                   </div>
-                  <div className="flex justify-end">
-                    {c.status === "DRAFT" && (
-                      <Link
-                        href={`/new?edit=${c.id}`}
-                        className="rounded-[var(--radius-sm)] border border-[var(--warning)] px-3 py-1.5 text-xs font-semibold text-[var(--ink-primary)] transition-colors hover:bg-[rgba(251,191,36,0.18)]"
-                      >
-                        Edit
-                      </Link>
+                  <div className="flex flex-wrap justify-end gap-1.5">
+                    {NOT_LAUNCHED_STATUSES.includes(c.status) && (
+                      <>
+                        <Link
+                          href={`/new?edit=${c.id}`}
+                          className="rounded-[var(--radius-sm)] border border-[var(--warning)] px-3 py-1.5 text-xs font-semibold text-[var(--ink-primary)] transition-colors hover:bg-[rgba(251,191,36,0.18)]"
+                        >
+                          Edit
+                        </Link>
+                        <Link
+                          href={`/new?edit=${c.id}&fresh=1`}
+                          className="rounded-[var(--radius-sm)] border border-[var(--line-standard)] px-3 py-1.5 text-xs font-semibold text-[var(--ink-secondary)] transition-colors hover:bg-[var(--surface-2)]"
+                        >
+                          Start over
+                        </Link>
+                        <DeleteCampaignButton campaignId={c.id} />
+                      </>
                     )}
                     {(c.status === "ACTIVE" || c.status === "LAUNCHING") && <StopButton campaignId={c.id} />}
                   </div>
