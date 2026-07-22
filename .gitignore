@@ -40,3 +40,6 @@ Thumbs.db
 
 # Installed agent skills (tooling, not app code)
 .agents/
+
+# Separate local project (Instaflow_studio) — its own git repo
+/Instaflow_studio/
