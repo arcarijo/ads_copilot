@@ -9,7 +9,7 @@ import { sanitizeCampaignInput } from "@/lib/sanitize";
 import { validateTargeting } from "@/lib/targeting";
 
 // See the matching comment in app/page.tsx — same not-launched/launched split.
-const NOT_LAUNCHED_STATUSES = ["DRAFT", "NEEDS_CLARIFICATION", "READY"];
+const NOT_LAUNCHED_STATUSES = ["DRAFT", "NEEDS_CLARIFICATION", "READY", "ERROR"];
 
 export async function GET() {
   const auth = await requireSession();

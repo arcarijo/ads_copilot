@@ -84,6 +84,7 @@ function NewCampaignForm() {
   const [phase, setPhase] = useState<Phase>("FORM");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [launchError, setLaunchError] = useState<string | null>(null);
   const [loadingEdit, setLoadingEdit] = useState(!!editId);
 
   // Client selection
@@ -507,6 +508,7 @@ function NewCampaignForm() {
     setPreflightBusy(true);
     setPreflight(null);
     setError(null);
+    setLaunchError(null);
     try {
       const res = await fetch(`/api/campaigns/${cid}/preflight`, { method: "POST" });
       const json = (await res.json()) as PreflightResult;
@@ -525,13 +527,13 @@ function NewCampaignForm() {
   async function approveAndLaunch() {
     if (!campaignId) return;
     setBusy(true);
-    setError(null);
+    setLaunchError(null);
     setPhase("LAUNCHING");
     const res = await fetch(`/api/campaigns/${campaignId}/launch`, { method: "POST" });
     const json = await res.json();
     setBusy(false);
     if (!json.ok) {
-      setError(json.error);
+      setLaunchError(json.error);
       if (json.preflight) setPreflight(json.preflight as PreflightResult);
       setPhase("RECEIPT");
       return;
@@ -1391,6 +1393,9 @@ function NewCampaignForm() {
           >
             {phase === "LAUNCHING" ? "Launching to Meta…" : preflight?.ready ? "✅ Approve & Launch" : "Launch blocked — checks not passed"}
           </button>
+          {launchError && (
+            <div className="mt-3 rounded-xl border border-[var(--line-standard)] bg-[var(--danger-wash)] p-4 text-sm text-[var(--danger)]">{launchError}</div>
+          )}
         </div>
       )}
     </div>

@@ -10,7 +10,7 @@ import { getSession, canAccessCampaign } from "@/lib/auth";
 export const dynamic = "force-dynamic";
 
 // See the matching comment in app/page.tsx — same not-launched/launched split.
-const NOT_LAUNCHED_STATUSES = ["DRAFT", "NEEDS_CLARIFICATION", "READY"];
+const NOT_LAUNCHED_STATUSES = ["DRAFT", "NEEDS_CLARIFICATION", "READY", "ERROR"];
 
 // Internal log source codes aren't meaningful to clients — "CRON" in
 // particular reads as an unexplained system term. Admins keep the raw code

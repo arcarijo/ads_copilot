@@ -17,7 +17,7 @@ const stagger = (i: number, extra?: CSSProperties): CSSProperties => ({ ["--i" a
 // a Meta campaign ID) — only its directive can be tuned from then on, and it
 // can be stopped but never rebuilt or deleted. Everything before that point
 // is still just a plan, so it's fully editable/discardable.
-const NOT_LAUNCHED_STATUSES = ["DRAFT", "NEEDS_CLARIFICATION", "READY"];
+const NOT_LAUNCHED_STATUSES = ["DRAFT", "NEEDS_CLARIFICATION", "READY", "ERROR"];
 
 export const dynamic = "force-dynamic";
 
