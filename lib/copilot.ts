@@ -6,6 +6,7 @@ import { COPILOT_SYSTEM_PROMPT } from "./prompts";
 import { assertBudgetAllowed, MIN_BUDGET_CENTS } from "./guardrails";
 import { CopilotResult, CreativeInput, MetaTargeting } from "./types";
 import { TargetingInput, formatTargetingForModel, metaGenders } from "./targeting";
+import { CampaignIntent, INTENT_DEFS } from "./campaignIntent";
 
 const targetingSchema = z.object({
   geo_locations: z.object({
@@ -87,6 +88,7 @@ export interface QuestionnaireInput {
   abVariable?: "CREATIVE" | "AUDIENCE";
   abNotes?: string;
   campaignDirective?: string;
+  campaignIntent?: CampaignIntent; // strategic frame → steers rotation vs A/B
   targeting?: TargetingInput; // structured, app-validated location + age/gender
   clarificationAnswers?: Record<string, string>;
 }
@@ -136,6 +138,9 @@ export async function runCopilot(input: QuestionnaireInput): Promise<CopilotResu
     "=== BUSINESS PROFILE ===",
     businessInfo,
     audienceBlock ? `=== PERSISTENT AUDIENCE ASSETS ===\n${audienceBlock}` : "",
+    input.campaignIntent && INTENT_DEFS[input.campaignIntent]
+      ? `=== CAMPAIGN INTENT (the owner's stated goal for this campaign — shape the whole plan around it) ===\n${INTENT_DEFS[input.campaignIntent].promptDirective}`
+      : "",
     input.campaignDirective?.trim()
       ? `=== CAMPAIGN DIRECTIVE (highest priority for THIS campaign — a human set this; honor it in the plan) ===\n${input.campaignDirective.trim()}`
       : "",

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, log } from "@/lib/db";
 import { runCopilot, QuestionnaireInput } from "@/lib/copilot";
+import { AiUnavailableError } from "@/lib/ai";
 import { runResearch } from "@/lib/research";
 import { requireSession, campaignScope, canAccessClient, canAccessCampaign } from "@/lib/auth";
 import { aiRateLimited } from "@/lib/rateLimit";
@@ -64,6 +65,7 @@ export async function POST(req: NextRequest) {
     abVariable: cv.abVariable,
     abNotes: cv.abNotes,
     campaignDirective: cv.campaignDirective,
+    campaignIntent: cv.campaignIntent,
   });
 
   // Structured targeting (locations + age/gender) has its own validator.
@@ -139,6 +141,15 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({ campaignId: campaign.id, ...result });
   } catch (err) {
+    // AI backend down/unconfigured: log the real reason server-side, but never
+    // leak internal env-var names to the user — point them at their admin.
+    if (err instanceof AiUnavailableError) {
+      console.error("[campaigns] AI unavailable:", err.message);
+      return NextResponse.json(
+        { error: "The AI Copilot isn't available right now — please contact your admin." },
+        { status: 503 },
+      );
+    }
     return NextResponse.json({ error: (err as Error).message }, { status: 422 });
   }
 }

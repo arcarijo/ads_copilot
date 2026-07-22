@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { CopilotPlan, CreativeInput } from "@/lib/types";
 import { resolveCoverage, corridorsFor, ONTARIO_CITIES, TIER_ORDER, TIER_LABELS, type CoverageTier } from "@/lib/geoOntario";
+import { CAMPAIGN_INTENTS, INTENT_DEFS, intentApproachNudge, type CampaignIntent } from "@/lib/campaignIntent";
 
 interface ClientOption {
   id: string;
@@ -24,12 +25,65 @@ const inputCls =
   "w-full rounded-lg border border-[var(--line-standard)] bg-[var(--surface-1)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)]";
 const labelCls = "mb-1 block text-sm font-medium text-[var(--ink-secondary)]";
 
+// Per-kind visual coding for creative cards so a mixed set is scannable at a
+// glance (the wizard allows image/video/carousel side by side).
+const KIND_STYLE: Record<CreativeInput["kind"], { border: string; wash: string; label: string; accent: string }> = {
+  IMAGE: { border: "var(--info)", wash: "var(--info-wash)", label: "🖼️ Single image", accent: "var(--info)" },
+  VIDEO: { border: "var(--accent)", wash: "var(--accent-wash)", label: "🎬 Video", accent: "var(--accent)" },
+  CAROUSEL: { border: "var(--human)", wash: "var(--human-wash)", label: "🎠 Carousel", accent: "var(--human)" },
+};
+
+// Plain-language "when should I pick this?" guidance for owners with zero Meta
+// experience. Shown live on each card based on the chosen format.
+const KIND_GUIDE: Record<CreativeInput["kind"], { bestFor: string; effort: string; tip: string }> = {
+  IMAGE: {
+    bestFor: "One strong photo with a clear offer — the simplest, fastest, cheapest ad to make.",
+    effort: "Easiest to produce",
+    tip: "Best starting point if you're unsure. Use your most striking venue or event photo.",
+  },
+  VIDEO: {
+    bestFor: "Showing your space in motion — walkthroughs, event vibes, testimonials. Highest engagement.",
+    effort: "Needs a decent video",
+    tip: "Great for emotion and awareness. Even a 15–30s phone clip of the room set up for an event works.",
+  },
+  CAROUSEL: {
+    bestFor: "2–10 swipeable images — show multiple spaces, packages, or tell a step-by-step story.",
+    effort: "Needs several photos",
+    tip: "Best when you have more than one thing to show (e.g. ceremony space, reception hall, patio).",
+  },
+};
+
+/** Client-side check: is this a Google Drive FOLDER share link? (mirrors the
+ * server's extractDriveFolderId; kept local so no server module is bundled.) */
+function isDriveFolderLink(v: string): boolean {
+  return /^https?:\/\/(drive|docs)\.google\.com\/.*\/folders\/[A-Za-z0-9_-]{10,}/i.test((v ?? "").trim());
+}
+
+interface FolderCheck {
+  checking: boolean;
+  ok?: boolean;
+  count?: number;
+  names?: string[];
+  error?: string;
+}
+
 export default function NewCampaign() {
+  return (
+    <Suspense fallback={null}>
+      <NewCampaignForm />
+    </Suspense>
+  );
+}
+
+function NewCampaignForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const editId = searchParams.get("edit");
   const [step, setStep] = useState<Step>(1);
   const [phase, setPhase] = useState<Phase>("FORM");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadingEdit, setLoadingEdit] = useState(!!editId);
 
   // Client selection
   const [clients, setClients] = useState<ClientOption[]>([]);
@@ -91,6 +145,7 @@ export default function NewCampaign() {
   }, [clientId]);
 
   // Questionnaire state
+  const [campaignIntent, setCampaignIntent] = useState<CampaignIntent | "">("");
   const [campaignName, setCampaignName] = useState("");
   const [goal, setGoal] = useState("Booking inquiries");
   const [landingPageUrl, setLandingPageUrl] = useState("");
@@ -129,6 +184,23 @@ export default function NewCampaign() {
   const [creatives, setCreatives] = useState<CreativeInput[]>([
     { kind: "IMAGE", label: "Creative A", filePaths: [""], primaryText: "", headline: "", linkUrl: "" },
   ]);
+  // Per-creative Drive-folder validation results (carousel folder links).
+  const [folderChecks, setFolderChecks] = useState<Record<number, FolderCheck>>({});
+
+  async function checkFolder(i: number, url: string) {
+    setFolderChecks((m) => ({ ...m, [i]: { checking: true } }));
+    try {
+      const res = await fetch("/api/campaigns/resolve-folder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const j = (await res.json()) as Omit<FolderCheck, "checking">;
+      setFolderChecks((m) => ({ ...m, [i]: { checking: false, ...j } }));
+    } catch {
+      setFolderChecks((m) => ({ ...m, [i]: { checking: false, ok: false, error: "Couldn't check that folder. Try again." } }));
+    }
+  }
 
   // Copilot state
   const [campaignId, setCampaignId] = useState<string | null>(null);
@@ -156,12 +228,83 @@ export default function NewCampaign() {
     return () => clearInterval(t);
   }, [busy]);
 
+  // Resuming an existing DRAFT/NEEDS_CLARIFICATION campaign from the Monitor
+  // page's Edit button (?edit=<id>). Loads the last-submitted questionnaire
+  // from the server (not localStorage — that's a different, browser-local
+  // in-progress form) and hydrates the same fields the wizard already tracks.
+  // Geography collapses to the manual location rows: the server only stores
+  // the resolved targeting, not which coverage-ladder tier produced it.
+  useEffect(() => {
+    if (!editId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/campaigns/${editId}`);
+        const json = await res.json();
+        if (cancelled) return;
+        if (!res.ok || !json.campaign) {
+          setError("Couldn't load that draft — it may have been deleted.");
+          setLoadingEdit(false);
+          return;
+        }
+        const c = json.campaign as { clientId?: string | null; questionnaireJson?: string };
+        let q: Record<string, unknown> = {};
+        try { q = JSON.parse(c.questionnaireJson || "{}"); } catch { /* leave empty */ }
+        setCampaignId(editId);
+        if (c.clientId) setClientId(c.clientId);
+        if (typeof q.campaignIntent === "string" && (CAMPAIGN_INTENTS as string[]).includes(q.campaignIntent)) setCampaignIntent(q.campaignIntent as CampaignIntent);
+        if (typeof q.campaignName === "string") setCampaignName(q.campaignName);
+        if (typeof q.goal === "string") setGoal(q.goal);
+        if (typeof q.landingPageUrl === "string") setLandingPageUrl(q.landingPageUrl);
+        if (typeof q.targetAudience === "string") setTargetAudience(q.targetAudience);
+        if (typeof q.budgetDollars === "number") setBudgetDollars(q.budgetDollars);
+        if (q.budgetType === "DAILY" || q.budgetType === "LIFETIME") setBudgetType(q.budgetType);
+        if (typeof q.durationDays === "number") setDurationDays(q.durationDays);
+        if (typeof q.abTest === "boolean") setAbTest(q.abTest);
+        if (q.abVariable === "CREATIVE" || q.abVariable === "AUDIENCE") setAbVariable(q.abVariable);
+        if (typeof q.abNotes === "string") setAbNotes(q.abNotes);
+        if (typeof q.campaignDirective === "string") setCampaignDirective(q.campaignDirective);
+        const targeting = (q.targeting ?? {}) as Record<string, unknown>;
+        if (Array.isArray(targeting.locations) && targeting.locations.length) {
+          setHostCity(""); // collapse the coverage ladder — these rows carry the full picture now
+          setUseCorridors(false);
+          setLocations((targeting.locations as unknown[]).slice(0, 10).map((rw) => {
+            const l = (rw ?? {}) as Record<string, unknown>;
+            const r = Math.round(Number(l.radiusKm));
+            return { name: typeof l.name === "string" ? l.name : "", radiusKm: Number.isFinite(r) ? Math.min(80, Math.max(1, r)) : 15 };
+          }));
+        }
+        if (typeof targeting.ageMin === "number") setAgeMin(String(targeting.ageMin));
+        if (typeof targeting.ageMax === "number") setAgeMax(String(targeting.ageMax));
+        if (targeting.gender === "MALE" || targeting.gender === "FEMALE" || targeting.gender === "ALL") setGender(targeting.gender);
+        if (Array.isArray(q.creatives) && q.creatives.length) {
+          setCreatives((q.creatives as unknown[]).slice(0, 10).map((rw, i) => {
+            const cr = (rw ?? {}) as Record<string, unknown>;
+            const kind = cr.kind === "CAROUSEL" || cr.kind === "VIDEO" ? cr.kind : "IMAGE";
+            return {
+              kind: kind as CreativeInput["kind"],
+              label: `Creative ${String.fromCharCode(65 + i)}`,
+              filePaths: Array.isArray(cr.filePaths) ? ((cr.filePaths as unknown[]).filter((x) => typeof x === "string") as string[]) : [""],
+              primaryText: typeof cr.primaryText === "string" ? cr.primaryText : "",
+              headline: typeof cr.headline === "string" ? cr.headline : "",
+              linkUrl: typeof cr.linkUrl === "string" ? cr.linkUrl : "",
+            };
+          }));
+        }
+      } catch {
+        if (!cancelled) setError("Couldn't load that draft. Try again.");
+      }
+      if (!cancelled) { setLoadingEdit(false); setDraftRestoreDone(true); }
+    })();
+    return () => { cancelled = true; };
+  }, [editId]);
+
   // Restore a saved draft once, as soon as we know which user this is. Shapes
   // from storage are defensively coerced so a tampered/corrupt draft can only
   // repopulate the form (never crash it), and everything is re-validated
   // server-side on submit.
   useEffect(() => {
-    if (!draftKey || draftRestoreDone) return;
+    if (!draftKey || draftRestoreDone || editId) return;
     try {
       const raw = localStorage.getItem(draftKey);
       if (raw) {
@@ -170,6 +313,7 @@ export default function NewCampaign() {
         s("campaignName", setCampaignName); s("goal", setGoal); s("landingPageUrl", setLandingPageUrl);
         s("clientId", setClientId); s("targetAudience", setTargetAudience); s("hostCity", setHostCity);
         s("ageMin", setAgeMin); s("ageMax", setAgeMax); s("abNotes", setAbNotes); s("campaignDirective", setCampaignDirective);
+        if (typeof d.campaignIntent === "string" && (CAMPAIGN_INTENTS as string[]).includes(d.campaignIntent)) setCampaignIntent(d.campaignIntent as CampaignIntent);
         if (typeof d.coverageTier === "string") setCoverageTier(d.coverageTier as CoverageTier);
         if (typeof d.useCorridors === "boolean") setUseCorridors(d.useCorridors as boolean);
         if (d.gender === "MALE" || d.gender === "FEMALE" || d.gender === "ALL") setGender(d.gender);
@@ -191,7 +335,7 @@ export default function NewCampaign() {
             const kind = c.kind === "CAROUSEL" || c.kind === "VIDEO" ? c.kind : "IMAGE";
             return {
               kind: kind as CreativeInput["kind"],
-              label: typeof c.label === "string" ? c.label : `Creative ${String.fromCharCode(65 + i)}`,
+              label: `Creative ${String.fromCharCode(65 + i)}`, // auto-assigned by position, not user-set
               filePaths: Array.isArray(c.filePaths) ? ((c.filePaths as unknown[]).filter((x) => typeof x === "string") as string[]) : [""],
               primaryText: typeof c.primaryText === "string" ? c.primaryText : "",
               headline: typeof c.headline === "string" ? c.headline : "",
@@ -210,13 +354,13 @@ export default function NewCampaign() {
   // Autosave the form (debounced) once any existing draft has been read.
   useEffect(() => {
     if (!draftKey || !draftRestoreDone || phase !== "FORM") return;
-    const snapshot = { campaignName, goal, landingPageUrl, clientId, targetAudience, hostCity, coverageTier, useCorridors, locations, ageMin, ageMax, gender, budgetDollars, budgetType, durationDays, creatives, abTest, abVariable, abNotes, campaignDirective };
+    const snapshot = { campaignIntent, campaignName, goal, landingPageUrl, clientId, targetAudience, hostCity, coverageTier, useCorridors, locations, ageMin, ageMax, gender, budgetDollars, budgetType, durationDays, creatives, abTest, abVariable, abNotes, campaignDirective };
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       try { localStorage.setItem(draftKey, JSON.stringify(snapshot)); setDraftSavedAt(Date.now()); } catch { /* quota — ignore */ }
     }, 600);
     return () => clearTimeout(saveTimer.current);
-  }, [draftKey, draftRestoreDone, phase, campaignName, goal, landingPageUrl, clientId, targetAudience, hostCity, coverageTier, useCorridors, locations, ageMin, ageMax, gender, budgetDollars, budgetType, durationDays, creatives, abTest, abVariable, abNotes, campaignDirective]);
+  }, [draftKey, draftRestoreDone, phase, campaignIntent, campaignName, goal, landingPageUrl, clientId, targetAudience, hostCity, coverageTier, useCorridors, locations, ageMin, ageMax, gender, budgetDollars, budgetType, durationDays, creatives, abTest, abVariable, abNotes, campaignDirective]);
 
   function clearDraft() {
     if (draftKey) {
@@ -240,11 +384,24 @@ export default function NewCampaign() {
     setCreatives((cs) => cs.map((c, j) => (j === i ? { ...c, ...patch } : c)));
   }
 
+  // Labels are auto-assigned by position (Creative A, B, C…) and never user-set —
+  // they're just stable, unique identifiers the copilot/launcher use to match
+  // ads to creatives. Relabel on every add/remove so display and stored value
+  // always agree and stay unique.
+  function relabel(cs: CreativeInput[]): CreativeInput[] {
+    return cs.map((c, i) => ({ ...c, label: `Creative ${String.fromCharCode(65 + i)}` }));
+  }
+
   function addCreative() {
-    setCreatives((cs) => [
-      ...cs,
-      { kind: "IMAGE", label: `Creative ${String.fromCharCode(65 + cs.length)}`, filePaths: [""], primaryText: "", headline: "", linkUrl: "" },
-    ]);
+    setCreatives((cs) =>
+      cs.length < 10
+        ? relabel([...cs, { kind: "IMAGE", label: "", filePaths: [""], primaryText: "", headline: "", linkUrl: "" }])
+        : cs,
+    );
+  }
+
+  function removeCreative(i: number) {
+    setCreatives((cs) => (cs.length > 1 ? relabel(cs.filter((_, j) => j !== i)) : cs));
   }
 
   // Resolve the coverage ladder → concrete Meta locations + strategy hints.
@@ -252,6 +409,14 @@ export default function NewCampaign() {
     () => resolveCoverage(hostCity, coverageTier, useCorridors),
     [hostCity, coverageTier, useCorridors],
   );
+
+  // Live validity of the (optional) landing URL — empty is fine, otherwise it
+  // must be a parseable https URL, matching the server's safeUrl() boundary.
+  const landingUrlValid = useMemo(() => {
+    const v = landingPageUrl.trim();
+    if (!v) return true;
+    try { return new URL(v).protocol === "https:"; } catch { return false; }
+  }, [landingPageUrl]);
 
   function buildTargeting() {
     const manual = locations.map((l) => ({ name: l.name.trim(), radiusKm: l.radiusKm })).filter((l) => l.name);
@@ -291,6 +456,7 @@ export default function NewCampaign() {
       body: JSON.stringify({
         campaignId: campaignId ?? undefined,
         clientId: clientId || undefined,
+        campaignIntent: campaignIntent || undefined,
         campaignName,
         goal,
         landingPageUrl,
@@ -367,9 +533,26 @@ export default function NewCampaign() {
 
   const steps = ["Basics", "Audience", "Budget & Schedule", "Creatives & A/B"];
 
+  if (loadingEdit) {
+    return (
+      <div className="mx-auto max-w-2xl space-y-6">
+        <h1 className="text-2xl font-semibold">New Campaign</h1>
+        <div className="flex items-center gap-2 rounded-xl border border-[var(--line-standard)] bg-[var(--surface-1)] p-4 text-sm text-[var(--ink-secondary)]">
+          <Spinner /> Loading your draft…
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className={`mx-auto ${phase === "FORM" && step === 4 ? "max-w-4xl" : "max-w-2xl"} space-y-6`}>
       <h1 className="text-2xl font-semibold">New Campaign</h1>
+
+      {editId && !error && (
+        <div className="rounded-xl border border-[var(--warning)] bg-[var(--warning-wash)] p-3 text-sm text-[var(--ink-primary)]">
+          ↩ Continuing your saved draft — pick up where you left off.
+        </div>
+      )}
 
       {error && (
         <div className="rounded-xl border border-[var(--line-standard)] bg-[var(--danger-wash)] p-4 text-sm text-[var(--danger)]">{error}</div>
@@ -399,7 +582,7 @@ export default function NewCampaign() {
               <button
                 type="button"
                 onClick={() => { clearDraft(); window.location.reload(); }}
-                className="shrink-0 text-[var(--ink-tertiary)] hover:underline"
+                className="shrink-0 rounded-lg border border-[var(--line-standard)] px-3 py-1.5 text-[var(--ink-tertiary)] transition hover:bg-[var(--surface-2)] hover:text-[var(--ink-secondary)] active:scale-[0.98]"
               >
                 Start over
               </button>
@@ -409,6 +592,44 @@ export default function NewCampaign() {
           <div className="space-y-4 rounded-xl border border-[var(--line-subtle)] bg-[var(--surface-1)] p-6">
             {step === 1 && (
               <>
+                {/* Strategic intent, captured first — it coaches every later
+                    choice, above all the rotation-vs-A/B decision on Step 4. */}
+                <div>
+                  <label className={labelCls}>What&rsquo;s this campaign for?</label>
+                  <p className="mb-2 text-xs text-[var(--ink-muted)]">
+                    Pick the goal that fits best — we&rsquo;ll tailor the whole setup, and how the AI builds your ads, around it.
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {CAMPAIGN_INTENTS.map((key) => {
+                      const def = INTENT_DEFS[key];
+                      const active = campaignIntent === key;
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => { setCampaignIntent(key); setGoal(def.suggestedGoal); }}
+                          className="flex items-start gap-3 rounded-xl border p-3 text-left transition hover:brightness-110 active:scale-[0.99]"
+                          style={{
+                            borderColor: active ? "var(--accent)" : "var(--line-subtle)",
+                            background: active ? "var(--accent-wash)" : "var(--surface-1)",
+                          }}
+                        >
+                          <span className="text-xl leading-none">{def.icon}</span>
+                          <span>
+                            <span className="block text-sm font-semibold text-[var(--ink-primary)]">{def.label}</span>
+                            <span className="block text-xs text-[var(--ink-muted)]">{def.tagline}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {campaignIntent && (
+                    <div className="mt-2 rounded-lg bg-[var(--surface-2)] px-3 py-2 text-xs text-[var(--ink-secondary)]">
+                      <b className="text-[var(--ink-primary)]">Why we recommend this approach:</b> {INTENT_DEFS[campaignIntent].whyRecommend}
+                    </div>
+                  )}
+                </div>
+
                 <div>
                   <label className={labelCls}>Client</label>
                   <select className={inputCls} value={clientId} onChange={(e) => setClientId(e.target.value)}>
@@ -443,7 +664,21 @@ export default function NewCampaign() {
                 </div>
                 <div>
                   <label className={labelCls}>Landing page URL</label>
-                  <input className={inputCls} value={landingPageUrl} onChange={(e) => setLandingPageUrl(e.target.value)} placeholder="https://yourvenue.com/book" />
+                  <input
+                    className={inputCls}
+                    style={landingPageUrl.trim() ? { borderColor: landingUrlValid ? "var(--success)" : "var(--warning)" } : undefined}
+                    value={landingPageUrl}
+                    onChange={(e) => setLandingPageUrl(e.target.value)}
+                    placeholder="https://yourvenue.com/book"
+                    inputMode="url"
+                  />
+                  {landingPageUrl.trim() && (
+                    <p className={`mt-1 text-xs ${landingUrlValid ? "text-[var(--success)]" : "text-[var(--warning)]"}`}>
+                      {landingUrlValid
+                        ? "✓ Valid link — this is where your ad clicks will go."
+                        : "⚠️ That doesn't look like a full web address. Include https:// (e.g. https://yourvenue.com/book)."}
+                    </p>
+                  )}
                 </div>
               </>
             )}
@@ -485,6 +720,9 @@ export default function NewCampaign() {
                       <option key={c.name} value={`${c.name}, ON`} />
                     ))}
                   </datalist>
+                  <p className="mt-1 text-xs text-[var(--ink-muted)]">
+                    Type any city — the suggestions are common Ontario locations, but you can enter any place your event or studio is.
+                  </p>
 
                   <label className="mb-1 mt-3 block text-xs font-medium text-[var(--ink-tertiary)]">How far should this reach?</label>
                   <div className="space-y-1.5">
@@ -681,79 +919,116 @@ export default function NewCampaign() {
 
             {step === 4 && (
               <>
-                {creatives.map((c, i) => (
-                  <div key={i} className="space-y-3 rounded-lg border border-[var(--line-subtle)] p-4">
-                    <div className="flex items-center justify-between">
-                      <input className={`${inputCls} max-w-40 font-medium`} value={c.label} onChange={(e) => updateCreative(i, { label: e.target.value })} />
-                      <select className={`${inputCls} max-w-32`} value={c.kind} onChange={(e) => updateCreative(i, { kind: e.target.value as CreativeInput["kind"] })}>
-                        <option value="IMAGE">Single image</option>
-                        <option value="CAROUSEL">Carousel</option>
-                        <option value="VIDEO">Video</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className={labelCls}>
-                        {c.kind === "CAROUSEL"
-                          ? "Image links (Google Drive or https, one per line, 2–10)"
-                          : c.kind === "VIDEO"
-                            ? "Video — Google Drive share link (or public https URL)"
-                            : "Image — Google Drive share link (or public https URL)"}
-                      </label>
-                      <textarea
-                        className={inputCls}
-                        rows={c.kind === "CAROUSEL" ? 3 : 1}
-                        value={c.filePaths.join("\n")}
-                        onChange={(e) => updateCreative(i, { filePaths: e.target.value.split("\n") })}
-                        placeholder="https://drive.google.com/file/d/1AbC…/view"
-                      />
-                      <p className="mt-1 text-xs text-[var(--ink-muted)]">
-                        Paste the Drive share link and set its sharing to <b>&ldquo;Anyone with the link&rdquo;</b> so Meta can
-                        fetch it at launch — we don&rsquo;t copy or store your media.
-                      </p>
-                    </div>
-                    <div>
-                      <label className={labelCls}>Headline</label>
-                      <input className={inputCls} value={c.headline ?? ""} onChange={(e) => updateCreative(i, { headline: e.target.value })} placeholder="e.g. Book Your 2026 Wedding Date" />
-                      <p className="mt-1 text-xs text-[var(--ink-muted)]">The bold line under your image — short and punchy (~5–7 words).</p>
-                    </div>
-                    <div>
-                      <label className={labelCls}>Primary text</label>
-                      <textarea
-                        className={inputCls}
-                        rows={4}
-                        value={c.primaryText ?? ""}
-                        onChange={(e) => updateCreative(i, { primaryText: e.target.value })}
-                        placeholder="e.g. Say “I do” at Hamilton’s all-in-one waterfront venue — intimate weddings up to 80 guests, in-house catering, and a dedicated planner. Now booking spring & summer 2026. Tap to check your date."
-                      />
-                      <p className="mt-1 text-xs text-[var(--ink-muted)]">
-                        The main body of your ad. Lead with your hook in the <b>first ~125 characters</b> — that&rsquo;s what shows
-                        before Meta&rsquo;s &ldquo;See more&rdquo; cut-off on mobile. Communicate your <b>offer</b>, <b>what makes you
-                        different</b>, and a clear <b>call to action</b>. One to three short sentences almost always beats a wall of text.
-                      </p>
-                    </div>
-                  </div>
-                ))}
-                <button onClick={addCreative} className="text-sm text-[var(--success)] hover:underline">+ Add another creative</button>
+                {/* Retroactive intent switch — let the user pivot their goal here
+                    without going back to the Basics step. */}
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[var(--surface-2)] px-3 py-2">
+                  <label htmlFor="intent-switch" className="text-xs font-medium text-[var(--ink-secondary)]">
+                    Campaign goal — change your mind? Pivot anytime:
+                  </label>
+                  <select
+                    id="intent-switch"
+                    className="rounded-lg border border-[var(--line-standard)] bg-[var(--surface-1)] px-2 py-1 text-xs"
+                    value={campaignIntent}
+                    onChange={(e) => {
+                      const v = e.target.value as CampaignIntent | "";
+                      setCampaignIntent(v);
+                      if (v) setGoal(INTENT_DEFS[v].suggestedGoal);
+                    }}
+                  >
+                    <option value="">— pick a goal —</option>
+                    {CAMPAIGN_INTENTS.map((k) => (
+                      <option key={k} value={k}>{INTENT_DEFS[k].icon} {INTENT_DEFS[k].label}</option>
+                    ))}
+                  </select>
+                </div>
 
-                <div className="rounded-lg border border-[var(--line-subtle)] p-4">
+                {/* Intent-driven coaching: recommend rotation vs A/B for the
+                    owner's stated goal, and offer a one-click fix on conflict. */}
+                {campaignIntent && (() => {
+                  const def = INTENT_DEFS[campaignIntent];
+                  const nudge = intentApproachNudge(campaignIntent, abTest);
+                  return (
+                    <div className="rounded-xl border p-4" style={{ borderColor: "var(--accent)", background: "var(--accent-wash)" }}>
+                      <p className="text-sm font-semibold text-[var(--ink-primary)]">
+                        {def.icon} For &ldquo;{def.label}&rdquo;, we recommend{" "}
+                        {def.recommend === "AB" ? "a formal A/B split test" : "running 2–3 rotating ads — not a formal test"}.
+                      </p>
+                      <p className="mt-1 text-xs text-[var(--ink-secondary)]">{def.creativeGuidance}</p>
+                      {nudge && (
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-[var(--surface-1)] px-3 py-2">
+                          <span className="text-xs text-[var(--warning)]">⚠️ {nudge.message}</span>
+                          <button
+                            type="button"
+                            onClick={() => setAbTest(nudge.kind === "suggest-ab")}
+                            className="shrink-0 rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold text-black transition hover:bg-[var(--accent-strong)] active:scale-[0.98]"
+                          >
+                            {nudge.kind === "suggest-ab" ? "Turn on A/B for me" : "Switch to rotation"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* First-timer explainer, tucked behind progressive disclosure so
+                    it never walls off the task for repeat users. */}
+                <Disclosure summary="New to Meta ads? How campaigns, ad sets & ads fit together">
+                  <p>
+                    Think of your campaign like promoting an event — Meta stacks it in three layers. The AI builds the first two
+                    from what you&rsquo;ve already told us; <b>you build the third here</b>:
+                  </p>
+                  <ul className="space-y-1">
+                    <li><b className="text-[var(--ink-primary)]">Campaign</b> — your goal &amp; budget <span className="text-[var(--ink-muted)]">(earlier steps)</span></li>
+                    <li><b className="text-[var(--ink-primary)]">Ad set</b> — <b>who</b> sees it &amp; <b>where</b> the money goes <span className="text-[var(--ink-muted)]">(AI-built from your Step&nbsp;2 audience)</span></li>
+                    <li><b className="text-[var(--accent)]">Ads — this step</b> — <b>what people see</b>: your photo/video and words. Each creative below becomes one ad.</li>
+                  </ul>
+                  <p className="text-[var(--ink-muted)]">
+                    <b>Short version:</b> add one strong ad and launch. Add more, or split-test, only when you want to <i>learn</i> what works.
+                  </p>
+                </Disclosure>
+
+                <div className="rounded-lg bg-[var(--surface-2)] p-4">
                   <label className="flex items-center gap-3 text-sm">
                     <input type="checkbox" checked={abTest} onChange={(e) => setAbTest(e.target.checked)} className="h-4 w-4" />
-                    <span className="font-medium">Enable A/B split test at launch</span>
+                    <span className="font-medium">Run an A/B split test at launch</span>
                     <span className="text-xs text-[var(--ink-muted)]">— optional</span>
                   </label>
-                  <p className="mt-1 pl-7 text-xs text-[var(--ink-muted)]">
-                    Leave this off to launch a single, non-split campaign. You can launch with just one creative.
-                  </p>
+                  {!abTest && (
+                    <p className="mt-1 pl-7 text-xs text-[var(--ink-muted)]">
+                      Off = one campaign; your ads rotate and Meta favours the winner. Turn on to formally test <b>two</b> variants head-to-head.
+                    </p>
+                  )}
                   {abTest && (
                     <div className="mt-3">
-                      <label className={labelCls}>Split-test variable</label>
+                      <label className={labelCls}>What do you want to test?</label>
                       <select className={inputCls} value={abVariable} onChange={(e) => setAbVariable(e.target.value as "CREATIVE" | "AUDIENCE")}>
-                        <option value="CREATIVE">Creatives (needs 2+ creatives)</option>
-                        <option value="AUDIENCE">Audiences</option>
+                        <option value="CREATIVE">The ad itself — same audience, two different ads</option>
+                        <option value="AUDIENCE">The audience — same ad, two different ad sets</option>
                       </select>
+                      <div className="mt-2 rounded-lg bg-[var(--surface-1)] px-3 py-2 text-xs text-[var(--ink-secondary)]">
+                        {abVariable === "CREATIVE" ? (
+                          <>
+                            <b className="text-[var(--accent)]">Testing the ad (assets):</b> Meta shows the <i>same</i> people two different ads
+                            and finds the stronger one. Answers <i>&ldquo;which creative wins?&rdquo;</i> — e.g. a video venue tour vs a photo
+                            with a starting price. <b>Add exactly two creatives below</b> (any beyond that just run as extra rotating ads, not test cells).
+                          </>
+                        ) : (
+                          <>
+                            <b className="text-[var(--human)]">Testing the audience (ad sets):</b> Meta shows the <i>same</i> ad to two
+                            different audiences and finds who responds best. Answers <i>&ldquo;who should I target?&rdquo;</i> — e.g. couples 25–34 vs
+                            35–44. The AI builds the two ad sets from your Step 2 audience; you just need one strong ad.
+                          </>
+                        )}
+                      </div>
                       {abVariable === "CREATIVE" && creatives.length < 2 && (
                         <p className="mt-2 rounded-lg bg-[var(--warning-wash)] px-3 py-2 text-xs text-[var(--warning)]">
-                          ⚠️ Only one creative added. A creative split needs 2+. It will launch as a single campaign unless you add another creative above — or turn A/B off.
+                          ⚠️ Only one creative added. A creative split needs 2+. It will launch as a single campaign unless you add another creative below — or turn A/B off.
+                        </p>
+                      )}
+                      {abVariable === "CREATIVE" && new Set(creatives.map((c) => c.kind)).size > 1 && (
+                        <p className="mt-2 rounded-lg bg-[var(--warning-wash)] px-3 py-2 text-xs text-[var(--warning)]">
+                          ⚠️ Your creatives mix formats ({[...new Set(creatives.map((c) => c.kind))].join(", ").toLowerCase()}). A clean A/B
+                          test compares like-for-like — a video vs a carousel confounds the result. Use one format per split, or turn A/B off to just run them all.
                         </p>
                       )}
                       <div className="mt-3">
@@ -772,6 +1047,149 @@ export default function NewCampaign() {
                     </div>
                   )}
                 </div>
+
+                {/* Focal point of the step: the actual ads. A heading + a single
+                    helper line anchors it above the guidance that precedes it. */}
+                <div className="flex items-baseline justify-between gap-3 pt-2">
+                  <h3 className="text-base font-semibold text-[var(--ink-primary)]">Your ads</h3>
+                  <span className="text-xs text-[var(--ink-muted)]">{creatives.length} of 10</span>
+                </div>
+                <p className="-mt-3 text-xs text-[var(--ink-muted)]">
+                  Each creative becomes its own ad. One is enough to launch — add more to let Meta rotate them and favour the winner.
+                </p>
+                <div className="grid gap-4 lg:grid-cols-2">
+                {creatives.map((c, i) => {
+                  const ks = KIND_STYLE[c.kind];
+                  return (
+                  <div key={i} className="space-y-3 rounded-lg border p-4" style={{ borderColor: ks.border, background: ks.wash }}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-full px-2 py-0.5 text-xs font-semibold" style={{ background: ks.accent, color: "#1a0f08" }}>{ks.label}</span>
+                        <span className="text-sm font-semibold text-[var(--ink-primary)]">Creative {String.fromCharCode(65 + i)}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select className={`${inputCls} max-w-32`} value={c.kind} onChange={(e) => updateCreative(i, { kind: e.target.value as CreativeInput["kind"] })}>
+                          <option value="IMAGE">Single image</option>
+                          <option value="CAROUSEL">Carousel</option>
+                          <option value="VIDEO">Video</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => removeCreative(i)}
+                          disabled={creatives.length === 1}
+                          className="shrink-0 rounded-lg border border-[var(--line-standard)] px-2 py-2 text-xs text-[var(--ink-tertiary)] hover:bg-[var(--surface-2)] disabled:opacity-30"
+                          aria-label="Remove creative"
+                          title={creatives.length === 1 ? "At least one creative is required" : "Remove this creative"}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                    {/* A/B cell labeling: the plan only measures two cells (A/B).
+                        Make it explicit which cards are the test and which are extras. */}
+                    {abTest && abVariable === "CREATIVE" && (
+                      i < 2 ? (
+                        <span className="inline-block rounded-full bg-[var(--accent)] px-2 py-0.5 text-xs font-semibold text-black">
+                          Test variant {i === 0 ? "A" : "B"}
+                        </span>
+                      ) : (
+                        <span className="inline-block rounded-full bg-[var(--surface-3)] px-2 py-0.5 text-xs font-medium text-[var(--ink-tertiary)]">
+                          Extra rotating ad — not a measured test cell
+                        </span>
+                      )
+                    )}
+
+                    {/* Context helper for the chosen format — one quiet line (no
+                        nested card); the concrete tip is available on hover. */}
+                    <p className="text-xs text-[var(--ink-muted)]" title={KIND_GUIDE[c.kind].tip}>
+                      {KIND_GUIDE[c.kind].bestFor} <span className="text-[var(--ink-tertiary)]">· {KIND_GUIDE[c.kind].effort}</span>
+                    </p>
+
+                    <div>
+                      <label className={labelCls}>
+                        {c.kind === "CAROUSEL"
+                          ? "Image links (one per line, 2–10) — or one shared Drive folder link"
+                          : c.kind === "VIDEO"
+                            ? "Video — Google Drive share link (or public https URL)"
+                            : "Image — Google Drive share link (or public https URL)"}
+                      </label>
+                      <textarea
+                        className={inputCls}
+                        rows={c.kind === "CAROUSEL" ? 3 : 1}
+                        value={c.filePaths.join("\n")}
+                        onChange={(e) => updateCreative(i, { filePaths: e.target.value.split("\n") })}
+                        placeholder="https://drive.google.com/file/d/1AbC…/view"
+                      />
+                      <p className="mt-1 text-xs text-[var(--ink-muted)]">
+                        Set sharing to <b>&ldquo;Anyone with the link&rdquo;</b> so Meta can fetch at launch — we don&rsquo;t copy or store your media.
+                        {c.kind === "CAROUSEL" && <> For a carousel you can also paste <b>one shared folder link</b> and we&rsquo;ll pull its images.</>}
+                      </p>
+                      {c.kind === "CAROUSEL" && (() => {
+                        const lines = c.filePaths.map((p) => p.trim()).filter(Boolean);
+                        const folderLink = lines.length === 1 && isDriveFolderLink(lines[0]) ? lines[0] : null;
+                        if (folderLink) {
+                          const fc = folderChecks[i];
+                          return (
+                            <div className="mt-2 space-y-1">
+                              <button
+                                type="button"
+                                onClick={() => checkFolder(i, folderLink)}
+                                disabled={fc?.checking}
+                                className="rounded-lg border border-[var(--line-standard)] px-3 py-1.5 text-xs font-medium text-[var(--ink-secondary)] transition hover:bg-[var(--surface-2)] active:scale-[0.98] disabled:opacity-50"
+                              >
+                                {fc?.checking ? "Checking folder…" : "Check folder contents"}
+                              </button>
+                              {fc && !fc.checking && (
+                                <p className={`text-xs ${fc.ok ? "text-[var(--success)]" : "text-[var(--warning)]"}`}>
+                                  {fc.ok ? `✓ Found ${fc.count} image${fc.count === 1 ? "" : "s"} — ready for a carousel.` : `⚠️ ${fc.error}`}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        }
+                        const n = lines.length;
+                        const ok = n >= 2 && n <= 10;
+                        return (
+                          <p className={`mt-1 text-xs ${ok ? "text-[var(--success)]" : "text-[var(--warning)]"}`}>
+                            {ok ? "✓" : "⚠️"} {n} image link{n === 1 ? "" : "s"} — a carousel needs <b>2–10</b> (or one shared folder link).
+                          </p>
+                        );
+                      })()}
+                    </div>
+                    <div>
+                      <label className={labelCls}>Headline</label>
+                      <input className={inputCls} value={c.headline ?? ""} onChange={(e) => updateCreative(i, { headline: e.target.value })} placeholder="e.g. Book Your 2026 Wedding Date" />
+                      <p className="mt-1 text-xs text-[var(--ink-muted)]">The bold line under your image — short and punchy (~5–7 words).</p>
+                    </div>
+                    <div>
+                      <label className={labelCls}>Primary text</label>
+                      <textarea
+                        className={inputCls}
+                        rows={4}
+                        value={c.primaryText ?? ""}
+                        onChange={(e) => updateCreative(i, { primaryText: e.target.value })}
+                        placeholder="e.g. Say “I do” at Hamilton’s all-in-one waterfront venue — intimate weddings up to 80 guests, in-house catering, and a dedicated planner. Now booking spring & summer 2026. Tap to check your date."
+                      />
+                      <p className="mt-1 text-xs text-[var(--ink-muted)]">
+                        Lead with your hook in the <b>first ~125 characters</b> (before Meta&rsquo;s &ldquo;See more&rdquo;). Cover your offer,
+                        what&rsquo;s different, and a clear call to action — a few short sentences beat a wall of text.
+                      </p>
+                    </div>
+                  </div>
+                  );
+                })}
+                </div>
+                {creatives.length < 10 ? (
+                  <button
+                    type="button"
+                    onClick={addCreative}
+                    className="rounded-lg border border-[var(--line-standard)] px-3 py-1.5 text-sm font-medium text-[var(--success)] transition hover:bg-[var(--surface-2)] hover:brightness-110 active:scale-[0.98]"
+                  >
+                    + Add another creative
+                  </button>
+                ) : (
+                  <p className="text-xs text-[var(--ink-muted)]">Maximum of 10 creatives reached.</p>
+                )}
 
                 {/* Campaign directive + daily-check transparency */}
                 <div className="rounded-lg border border-[var(--line-subtle)] p-4">
@@ -975,6 +1393,24 @@ function Spinner() {
       className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-black/30 border-t-black"
       aria-hidden
     />
+  );
+}
+
+/**
+ * Progressive-disclosure block. Secondary guidance lives here so the default
+ * view stays scannable instead of stacking paragraphs into a wall. Native
+ * <details> = keyboard- and screen-reader-accessible for free; the summary row
+ * carries the project's hover/press feedback and a chevron that flips on open.
+ */
+function Disclosure({ summary, defaultOpen = false, children }: { summary: string; defaultOpen?: boolean; children: ReactNode }) {
+  return (
+    <details open={defaultOpen} className="group rounded-lg bg-[var(--surface-2)]">
+      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-[var(--ink-secondary)] transition hover:text-[var(--ink-primary)] active:scale-[0.99] [&::-webkit-details-marker]:hidden">
+        <span className="text-[var(--ink-tertiary)] transition-transform group-open:rotate-90" aria-hidden>›</span>
+        {summary}
+      </summary>
+      <div className="space-y-2 px-3 pb-3 pl-7 text-xs leading-relaxed text-[var(--ink-secondary)]">{children}</div>
+    </details>
   );
 }
 

@@ -9,6 +9,7 @@
 // Protection while still exercising the APP's own auth.
 
 import { call } from "../lib/http";
+import { FIXTURE_PREFIX } from "../config";
 import type { Check, Finding, RunContext } from "../types";
 import { worst } from "../types";
 
@@ -57,6 +58,24 @@ export const authzCheck: Check = async (ctx) => {
   });
   await expect("Member POST other tenant's research → 404 (SSRF/IDOR)", 404, {
     method: "POST", path: `/api/clients/${otherClientId}/research`, token: memberToken, body: {},
+  });
+
+  // --- Campaign creation: the /api/campaigns surface that now carries
+  // campaignIntent. Every deny path here short-circuits in the route BEFORE any
+  // campaign row is created or the copilot inference runs, so these are
+  // side-effect-free (no synthetic campaigns, no AI spend on staging). ---
+  await expect("Unauth GET /api/campaigns → 401", 401, { path: "/api/campaigns" });
+  await expect("Unauth POST /api/campaigns → 401", 401, {
+    method: "POST", path: "/api/campaigns", body: { campaignName: `${FIXTURE_PREFIX}x` },
+  });
+  await expect("Member GET /api/campaigns → 200 (own scope only)", 200, { path: "/api/campaigns", token: memberToken });
+  await expect("Member POST campaign under other tenant's client → 403 (tenant isolation)", 403, {
+    method: "POST", path: "/api/campaigns", token: memberToken,
+    body: { clientId: otherClientId, campaignName: `${FIXTURE_PREFIX}x`, campaignIntent: "GET_BOOKINGS" },
+  });
+  await expect("Member POST campaign with no client → 403 (must own a business)", 403, {
+    method: "POST", path: "/api/campaigns", token: memberToken,
+    body: { campaignName: `${FIXTURE_PREFIX}x`, campaignIntent: "GET_BOOKINGS" },
   });
 
   // --- Privilege escalation: member hitting admin-only surfaces (403) ---

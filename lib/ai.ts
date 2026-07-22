@@ -19,6 +19,19 @@ interface CfAiResponse {
 }
 
 /**
+ * Thrown when the AI backend is unconfigured or unreachable (missing creds,
+ * Cloudflare error/outage). Its message carries the real reason for SERVER logs;
+ * user-facing callers must catch this and show a friendly, non-leaky message
+ * instead of surfacing internal env-var names.
+ */
+export class AiUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AiUnavailableError";
+  }
+}
+
+/**
  * Runs the Cloudflare Workers AI Llama model with a system + user prompt and
  * returns strictly parsed JSON. Prompts demand JSON-only output; this parser
  * still defensively strips markdown fences and extracts the outermost object.
@@ -31,7 +44,7 @@ export async function runLlamaJson<T>(
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
   const token = process.env.CLOUDFLARE_AUTH_TOKEN;
   if (!accountId || !token) {
-    throw new Error("Cloudflare credentials missing: set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_AUTH_TOKEN.");
+    throw new AiUnavailableError("Cloudflare credentials missing: set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_AUTH_TOKEN.");
   }
 
   const model = opts.model ?? DEFAULT_MODEL;
@@ -51,7 +64,7 @@ export async function runLlamaJson<T>(
   const json = (await res.json().catch(() => ({}))) as CfAiResponse;
   if (!res.ok || json.success === false) {
     const msg = json.errors?.map((e) => e.message).join("; ") || `HTTP ${res.status}`;
-    throw new Error(`Cloudflare Workers AI request failed: ${msg}`);
+    throw new AiUnavailableError(`Cloudflare Workers AI request failed: ${msg}`);
   }
 
   // A successful call consumed Cloudflare quota regardless of what happens

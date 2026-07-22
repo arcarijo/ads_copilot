@@ -9,6 +9,8 @@
  * off-platform social links, and oversized/control-character junk.
  */
 
+import { CampaignIntent, toCampaignIntent } from "./campaignIntent";
+
 /** Social links must point at one of these known platforms (host or subdomain). */
 export const SOCIAL_HOSTS = [
   "instagram.com",
@@ -110,6 +112,7 @@ export interface CampaignInputValues {
   abVariable?: "CREATIVE" | "AUDIENCE";
   abNotes: string;
   campaignDirective: string;
+  campaignIntent?: CampaignIntent;
 }
 
 function clampInt(v: unknown, min: number, max: number, fallback: number): number {
@@ -168,9 +171,11 @@ export function sanitizeCampaignInput(b: Record<string, unknown>): { error: stri
   const abVariable = b.abVariable === "AUDIENCE" ? "AUDIENCE" : b.abVariable === "CREATIVE" ? "CREATIVE" : undefined;
   const abNotes = abTest ? cleanText(b.abNotes, 2000) : "";
   const campaignDirective = cleanText(b.campaignDirective, 2000);
+  // Intent is an enum-guarded strategic frame (may be absent on legacy drafts).
+  const campaignIntent = toCampaignIntent(b.campaignIntent) ?? undefined;
 
   return {
-    values: { campaignName, goal, landingPageUrl, targetAudience, budgetCents, budgetType, durationDays, creatives, abTest, abVariable, abNotes, campaignDirective },
+    values: { campaignName, goal, landingPageUrl, targetAudience, budgetCents, budgetType, durationDays, creatives, abTest, abVariable, abNotes, campaignDirective, campaignIntent },
   };
 }
 
