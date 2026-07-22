@@ -16,4 +16,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # One combined PR for all action bumps, instead of one per action.
+    groups:
+      github-actions:
+        patterns: ["*"]
     labels: ["dependencies", "ci"]

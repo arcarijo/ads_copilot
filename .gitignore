@@ -15,6 +15,7 @@ next-env.d.ts
 scripts/redteam/report/report-*.md
 scripts/redteam/report/report-*.json
 scripts/redteam/report/*.html
+scripts/redteam/report/*.yaml
 .redteam-gitleaks.json
 
 # Databases

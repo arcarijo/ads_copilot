@@ -16,7 +16,11 @@ feat/* branch → open PR to main
    → Vercel builds main → production (atomic; old prod stays live until READY)
 ```
 
-Merge = approval. Native required-reviewers isn't free on private repos, so CI makes the PR un-mergeable-until-green and the human merge is the gate.
+Merge = approval. **Note the honest limitation:** on a *private* repo, GitHub's free tier offers neither required reviewers nor required status checks — so CI cannot mechanically block a merge. What it does is post a loud, unmissable GO/NO-GO comment on every PR; the discipline rule is **never merge a PR whose `security` check isn't green**, and the sole human merger is the gate. To make the gate *mechanical* (free options):
+
+- **Make the repo public** — no secrets live in git (enforced by `.gitignore` + `.env.example`), and public repos get free branch-protection/rulesets *and* unlimited Actions minutes. Then add a ruleset requiring the `risk` + `security` checks before merge to `main`.
+- **or** keep it private on **GitHub Pro** (~$4/mo) for the same required-checks feature.
+- **or** keep the discipline gate (current state) — fine while one trusted person merges.
 
 ## Risk tiers
 
