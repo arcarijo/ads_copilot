@@ -16,7 +16,7 @@ const isPublic = createRouteMatcher([
   "/api/admin/encrypt",
   "/api/admin/rls",
 ]);
-const isAdminOnly = createRouteMatcher(["/users(.*)", "/api/users(.*)"]);
+const isAdminOnly = createRouteMatcher(["/users(.*)", "/api/users(.*)", "/logs(.*)"]);
 
 export default clerkMiddleware(async (auth, req) => {
   if (isPublic(req)) return;
