@@ -27,10 +27,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // Never let an unexpected failure fall through to Next's default HTML
     // error page — the client always expects JSON here. Log the real cause
     // server-side only; the client gets a generic message.
-    await log("UI", `Preflight failed unexpectedly for campaign ${id}: ${(err as Error).message}`, {
+    const message = (err as Error).message;
+    // eslint-disable-next-line no-console -- fallback visibility via Vercel
+    // runtime logs in case the DB write below also fails (e.g. connectivity).
+    console.error(`Preflight failed unexpectedly for campaign ${id}: ${message}`);
+    await log("UI", `Preflight failed unexpectedly for campaign ${id}: ${message}`, {
       campaignId: id,
       level: "ERROR",
-    }).catch(() => {});
+    }).catch((logErr) => console.error(`Also failed to write preflight-failure log entry: ${(logErr as Error).message}`));
     return NextResponse.json({ error: "Preflight check failed unexpectedly. Try again." }, { status: 500 });
   }
 }
