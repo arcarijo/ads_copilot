@@ -6,6 +6,8 @@ import { MetaApiError } from "@/lib/types";
 import { GuardrailViolation } from "@/lib/guardrails";
 import { requireSession, canAccessCampaign } from "@/lib/auth";
 
+export const maxDuration = 60;
+
 /**
  * HITL Gate #1: this route only fires when the user clicks "Approve & Launch"
  * on the plan receipt. Billing/account errors surface as structured alerts,
