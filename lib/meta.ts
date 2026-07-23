@@ -307,24 +307,50 @@ export interface VerifyCheck {
 
 /**
  * Readiness probe used by the onboarding form and preflight: token validity,
- * ad account status, funding source, Page access, Instagram access, and a
- * validate_only write-permission check. Nothing is ever persisted to Meta —
- * the campaign-create probe uses execution_options: ["validate_only"], which
- * runs full permission enforcement without creating anything.
+ * ad account status, funding source, Page access, Instagram access, Custom
+ * Audience TOS acceptance, and a validate_only write-permission check.
+ * Nothing is ever persisted to Meta — the campaign-create probe uses
+ * execution_options: ["validate_only"], which runs full permission
+ * enforcement without creating anything, and the TOS probe is a plain GET.
  */
 export async function verifyCredentials(creds: MetaCreds): Promise<{ ready: boolean; checks: VerifyCheck[] }> {
-  // The account/page/ad-creation-permission probes are independent Graph API
-  // calls — run them concurrently instead of in series so total latency stays
-  // well under the function timeout. Only the Instagram check is sequential,
-  // since it needs the page's linked IG id from the page probe.
-  const [accountChecks, pageChecks, adPermissionCheck] = await Promise.all([
+  // The account/page/ad-creation-permission/TOS probes are independent Graph
+  // API calls — run them concurrently instead of in series so total latency
+  // stays well under the function timeout. Only the Instagram check is
+  // sequential, since it needs the page's linked IG id from the page probe.
+  const [accountChecks, pageChecks, adPermissionCheck, tosCheck] = await Promise.all([
     verifyAccount(creds),
     verifyPage(creds),
     verifyAdCreationPermission(creds),
+    verifyCustomAudienceTos(creds),
   ]);
 
-  const checks = [...accountChecks, ...pageChecks, adPermissionCheck];
+  const checks = [...accountChecks, ...pageChecks, adPermissionCheck, tosCheck];
   return { ready: checks.every((c) => c.ok), checks };
+}
+
+// campaign-create validate_only doesn't exercise the Custom Audience gate at
+// all (it's scoped to the customaudiences endpoint, not campaigns), so a
+// client who hasn't accepted the Custom Audience TOS previously looked fully
+// "ready" until launch, when createCustomAudience failed reactively. This is
+// a plain read (`GET .../customaudiencestos`) — undocumented field shape, but
+// every third-party integration observed treats a populated `data` array as
+// "accepted" and empty as "not yet accepted," so that's the contract here too.
+async function verifyCustomAudienceTos(creds: MetaCreds): Promise<VerifyCheck> {
+  try {
+    const json = await metaFetch<{ data?: unknown[] }>(creds, `act_${creds.accountId}/customaudiencestos`);
+    const accepted = (json.data?.length ?? 0) > 0;
+    return {
+      item: "Custom Audience Terms of Service",
+      ok: accepted,
+      detail: accepted
+        ? "Custom Audience Terms of Service accepted for this ad account."
+        : `Custom Audience Terms of Service not yet accepted. Accept them at business.facebook.com/ads/manage/customaudiences/tos/?act=${creds.accountId} before launching any campaign that targets a Custom Audience.`,
+    };
+  } catch (err) {
+    const m = err instanceof MetaApiError ? err.humanMessage : (err as Error).message;
+    return { item: "Custom Audience Terms of Service", ok: false, detail: `Could not check Custom Audience TOS status: ${m}` };
+  }
 }
 
 async function verifyAccount(creds: MetaCreds): Promise<VerifyCheck[]> {

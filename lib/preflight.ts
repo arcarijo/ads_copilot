@@ -214,9 +214,11 @@ export async function preflightCampaign(
   try {
     const creds = campaign.client ? credsFromClient(campaign.client) : envCreds();
     const v = await verifyCredentials(creds);
+    const advisoryItems = new Set(["Funding source", "Custom Audience Terms of Service"]);
     for (const c of v.checks) {
-      // Funding is a warning (Meta is the final authority); token/account/page block.
-      add(`Meta: ${c.item}`, c.ok, c.item === "Funding source" ? "warning" : "error", "technical", c.detail);
+      // Funding and TOS are warnings (Meta is the final authority, and not
+      // every campaign targets a Custom Audience); token/account/page block.
+      add(`Meta: ${c.item}`, c.ok, advisoryItems.has(c.item) ? "warning" : "error", "technical", c.detail);
     }
   } catch (e) {
     add("Meta credentials", false, "error", "technical", (e as Error).message);
