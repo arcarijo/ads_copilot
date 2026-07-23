@@ -52,7 +52,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           ? "ACCOUNT_RESTRICTED"
           : err.kind === "TOKEN_INVALID"
             ? "TOKEN_INVALID"
-            : "GENERAL"
+            : err.kind === "TOS_REQUIRED"
+              ? "TOS_REQUIRED"
+              : "GENERAL"
       : "GENERAL";
 
     await prisma.campaign.update({

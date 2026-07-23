@@ -69,6 +69,10 @@ export function classifyMetaError(status: number, body: MetaErrorBody): MetaApiE
   } else if (code === 17 || code === 4 || code === 32 || code === 613) {
     kind = "RATE_LIMIT";
     human = "Meta API rate limit reached. The system will retry on the next cycle.";
+  } else if (/custom audience terms|terms of service.*custom audience|custom audience.*terms of service|tos.*custom audience/.test(msg)) {
+    kind = "TOS_REQUIRED";
+    human =
+      "This ad account hasn't accepted Meta's Custom Audience Terms of Service yet. Have the account owner accept them at business.facebook.com/ads/manage/customaudiences/tos, then retry — no campaign changes were made.";
   } else if (code === 200 || code === 10 || e.type === "OAuthException") {
     kind = "PERMISSION";
     human = `Meta permission error: ${e.message ?? "missing ads_management permission on this token."}`;
