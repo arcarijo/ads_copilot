@@ -4,6 +4,8 @@ import { credsFromClient, verifyCredentials } from "@/lib/meta";
 import { notifyAdminOfVerifyFailure } from "@/lib/email";
 import { requireSession, canAccessClient } from "@/lib/auth";
 
+export const maxDuration = 60;
+
 /** Live Meta credential readiness check for the onboarding form and Platforms panel. */
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireSession();

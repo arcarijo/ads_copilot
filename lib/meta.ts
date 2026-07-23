@@ -100,7 +100,15 @@ async function metaFetch<T>(
     init.body = form;
   }
 
-  const res = await fetch(url, init);
+  let res: Response;
+  try {
+    res = await fetch(url, { ...init, signal: AbortSignal.timeout(10_000) });
+  } catch (err) {
+    if (err instanceof Error && err.name === "TimeoutError") {
+      throw new MetaApiError("UNKNOWN", "Meta API request timed out after 10s. Meta may be degraded — try again shortly.");
+    }
+    throw err;
+  }
   const json = (await res.json().catch(() => ({}))) as T & MetaErrorBody;
   if (!res.ok || (json as MetaErrorBody).error) {
     throw classifyMetaError(res.status, json as MetaErrorBody);
@@ -301,8 +309,21 @@ export interface VerifyCheck {
  * runs full permission enforcement without creating anything.
  */
 export async function verifyCredentials(creds: MetaCreds): Promise<{ ready: boolean; checks: VerifyCheck[] }> {
-  const checks: VerifyCheck[] = [];
+  // The account/page/ad-creation-permission probes are independent Graph API
+  // calls — run them concurrently instead of in series so total latency stays
+  // well under the function timeout. Only the Instagram check is sequential,
+  // since it needs the page's linked IG id from the page probe.
+  const [accountChecks, pageChecks, adPermissionCheck] = await Promise.all([
+    verifyAccount(creds),
+    verifyPage(creds),
+    verifyAdCreationPermission(creds),
+  ]);
 
+  const checks = [...accountChecks, ...pageChecks, adPermissionCheck];
+  return { ready: checks.every((c) => c.ok), checks };
+}
+
+async function verifyAccount(creds: MetaCreds): Promise<VerifyCheck[]> {
   try {
     const acct = await metaFetch<{
       name?: string;
@@ -313,68 +334,76 @@ export async function verifyCredentials(creds: MetaCreds): Promise<{ ready: bool
     }>(creds, `act_${creds.accountId}`, {
       params: { fields: "name,account_status,currency,funding_source,funding_source_details" },
     });
-    checks.push({ item: "Access token", ok: true, detail: "Token accepted by Graph API." });
     const statusMap: Record<number, string> = { 1: "ACTIVE", 2: "DISABLED", 3: "UNSETTLED", 7: "PENDING_RISK_REVIEW", 9: "IN_GRACE_PERIOD", 101: "CLOSED" };
     const statusName = statusMap[acct.account_status ?? 0] ?? `code ${acct.account_status}`;
-    checks.push({
-      item: "Ad account status",
-      ok: acct.account_status === 1,
-      detail: `${acct.name ?? "account"} (${acct.currency ?? "?"}) — ${statusName}`,
-    });
     // A funding source is signalled by either the id, a display string, or the
     // legacy numeric funding_source. A card in the Business but not assigned to
     // THIS ad account will leave all of these empty.
     const fundingLabel = acct.funding_source_details?.display_string;
     const hasFunding = Boolean(fundingLabel || acct.funding_source_details?.id || acct.funding_source);
-    checks.push({
-      item: "Funding source",
-      ok: hasFunding,
-      detail: hasFunding
-        ? `${fundingLabel ?? "Payment method assigned"} (funding id ${acct.funding_source ?? acct.funding_source_details?.id}).`
-        : "No payment method is assigned to THIS ad account. A card added to the Business must still be set as this ad account's funding source: Meta Ads Manager → Billing & payment settings → select this ad account → Add/assign payment method. (Meta will also reject launch until this is done.)",
-    });
+    return [
+      { item: "Access token", ok: true, detail: "Token accepted by Graph API." },
+      {
+        item: "Ad account status",
+        ok: acct.account_status === 1,
+        detail: `${acct.name ?? "account"} (${acct.currency ?? "?"}) — ${statusName}`,
+      },
+      {
+        item: "Funding source",
+        ok: hasFunding,
+        detail: hasFunding
+          ? `${fundingLabel ?? "Payment method assigned"} (funding id ${acct.funding_source ?? acct.funding_source_details?.id}).`
+          : "No payment method is assigned to THIS ad account. A card added to the Business must still be set as this ad account's funding source: Meta Ads Manager → Billing & payment settings → select this ad account → Add/assign payment method. (Meta will also reject launch until this is done.)",
+      },
+    ];
   } catch (err) {
     const m = err instanceof MetaApiError ? err.humanMessage : (err as Error).message;
-    checks.push({ item: "Access token / ad account", ok: false, detail: m });
+    return [{ item: "Access token / ad account", ok: false, detail: m }];
   }
+}
 
-  if (creds.pageId) {
-    try {
-      const page = await metaFetch<{ name?: string; instagram_business_account?: { id: string } }>(creds, creds.pageId, {
-        params: { fields: "name,instagram_business_account" },
-      });
-      checks.push({ item: "Facebook Page access", ok: true, detail: `Page "${page.name}" reachable with this token.` });
+async function verifyPage(creds: MetaCreds): Promise<VerifyCheck[]> {
+  if (!creds.pageId) {
+    return [{ item: "Facebook Page access", ok: false, detail: "No Page ID provided." }];
+  }
+  try {
+    const page = await metaFetch<{ name?: string; instagram_business_account?: { id: string } }>(creds, creds.pageId, {
+      params: { fields: "name,instagram_business_account" },
+    });
+    const checks: VerifyCheck[] = [
+      { item: "Facebook Page access", ok: true, detail: `Page "${page.name}" reachable with this token.` },
+    ];
 
-      // A Page can have Instagram placements without the token having access to
-      // that IG account specifically — Page access alone does not imply this,
-      // and was the exact gap that let a client's launch fail after "VERIFIED".
-      const igId = page.instagram_business_account?.id;
-      if (igId) {
-        try {
-          const ig = await metaFetch<{ username?: string }>(creds, igId, { params: { fields: "username" } });
-          checks.push({ item: "Instagram account access", ok: true, detail: `Instagram @${ig.username ?? "account"} reachable — ads can publish to Instagram placements.` });
-        } catch (err) {
-          const m = err instanceof MetaApiError ? err.humanMessage : (err as Error).message;
-          checks.push({
-            item: "Instagram account access",
-            ok: false,
-            detail: `This Page has a linked Instagram account, but the token can't access it: ${m}. In Meta Business Settings, grant the system user access under Accounts → Instagram accounts (Page access alone does not cover it).`,
-          });
-        }
+    // A Page can have Instagram placements without the token having access to
+    // that IG account specifically — Page access alone does not imply this,
+    // and was the exact gap that let a client's launch fail after "VERIFIED".
+    const igId = page.instagram_business_account?.id;
+    if (igId) {
+      try {
+        const ig = await metaFetch<{ username?: string }>(creds, igId, { params: { fields: "username" } });
+        checks.push({ item: "Instagram account access", ok: true, detail: `Instagram @${ig.username ?? "account"} reachable — ads can publish to Instagram placements.` });
+      } catch (err) {
+        const m = err instanceof MetaApiError ? err.humanMessage : (err as Error).message;
+        checks.push({
+          item: "Instagram account access",
+          ok: false,
+          detail: `This Page has a linked Instagram account, but the token can't access it: ${m}. In Meta Business Settings, grant the system user access under Accounts → Instagram accounts (Page access alone does not cover it).`,
+        });
       }
-    } catch (err) {
-      const m = err instanceof MetaApiError ? err.humanMessage : (err as Error).message;
-      checks.push({ item: "Facebook Page access", ok: false, detail: m });
     }
-  } else {
-    checks.push({ item: "Facebook Page access", ok: false, detail: "No Page ID provided." });
+    return checks;
+  } catch (err) {
+    const m = err instanceof MetaApiError ? err.humanMessage : (err as Error).message;
+    return [{ item: "Facebook Page access", ok: false, detail: m }];
   }
+}
 
-  // Live write-permission probe. The checks above are all read-only GETs and
-  // succeed even when the token lacks ads_management — validate_only runs the
-  // ad account through the same permission enforcement a real launch does,
-  // without creating anything, so a missing/partial grant surfaces here
-  // instead of only at "Approve & Launch".
+// Live write-permission probe. The account/page checks above are all
+// read-only GETs and succeed even when the token lacks ads_management —
+// validate_only runs the ad account through the same permission enforcement a
+// real launch does, without creating anything, so a missing/partial grant
+// surfaces here instead of only at "Approve & Launch".
+async function verifyAdCreationPermission(creds: MetaCreds): Promise<VerifyCheck> {
   try {
     await metaFetch<{ id?: string; success?: boolean }>(creds, `act_${creds.accountId}/campaigns`, {
       body: {
@@ -385,11 +414,9 @@ export async function verifyCredentials(creds: MetaCreds): Promise<{ ready: bool
         execution_options: ["validate_only"],
       },
     });
-    checks.push({ item: "Ad creation permission", ok: true, detail: "Token can create campaigns on this ad account (validated only — nothing was created)." });
+    return { item: "Ad creation permission", ok: true, detail: "Token can create campaigns on this ad account (validated only — nothing was created)." };
   } catch (err) {
     const m = err instanceof MetaApiError ? err.humanMessage : (err as Error).message;
-    checks.push({ item: "Ad creation permission", ok: false, detail: `Token cannot create ads on this account: ${m}` });
+    return { item: "Ad creation permission", ok: false, detail: `Token cannot create ads on this account: ${m}` };
   }
-
-  return { ready: checks.every((c) => c.ok), checks };
 }
