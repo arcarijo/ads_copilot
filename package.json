@@ -9,6 +9,7 @@
     "migrate:dev": "prisma migrate dev",
     "postinstall": "prisma generate",
     "prisma:prod": "tsx scripts/with-env.ts --file=.env.production.secrets -- prisma",
+    "prisma:preview": "tsx scripts/with-env.ts --file=.env.preview.secrets -- prisma",
     "redteam": "tsx scripts/redteam/run.ts",
     "redteam:preflight": "tsx scripts/redteam/run.ts --tier=0",
     "redteam:standard": "tsx scripts/redteam/run.ts --tier=1",
