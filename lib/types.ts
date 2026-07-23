@@ -133,6 +133,7 @@ export type MetaErrorKind =
   | "TOKEN_INVALID"
   | "RATE_LIMIT"
   | "PERMISSION"
+  | "TOS_REQUIRED"
   | "VALIDATION"
   | "UNKNOWN";
 

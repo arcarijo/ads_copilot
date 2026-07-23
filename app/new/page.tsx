@@ -511,8 +511,12 @@ function NewCampaignForm() {
     setLaunchError(null);
     try {
       const res = await fetch(`/api/campaigns/${cid}/preflight`, { method: "POST" });
-      const json = (await res.json()) as PreflightResult;
-      setPreflight(json);
+      const json = await res.json();
+      if (!res.ok) {
+        setError((json as { error?: string }).error || "Preflight check could not run. Try again.");
+      } else {
+        setPreflight(json as PreflightResult);
+      }
     } catch {
       setError("Preflight check could not run. Try again.");
     }

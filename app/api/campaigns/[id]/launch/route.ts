@@ -6,6 +6,8 @@ import { MetaApiError } from "@/lib/types";
 import { GuardrailViolation } from "@/lib/guardrails";
 import { requireSession, canAccessCampaign } from "@/lib/auth";
 
+export const maxDuration = 60;
+
 /**
  * HITL Gate #1: this route only fires when the user clicks "Approve & Launch"
  * on the plan receipt. Billing/account errors surface as structured alerts,
@@ -50,7 +52,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           ? "ACCOUNT_RESTRICTED"
           : err.kind === "TOKEN_INVALID"
             ? "TOKEN_INVALID"
-            : "GENERAL"
+            : err.kind === "TOS_REQUIRED"
+              ? "TOS_REQUIRED"
+              : "GENERAL"
       : "GENERAL";
 
     await prisma.campaign.update({

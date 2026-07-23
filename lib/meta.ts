@@ -69,6 +69,10 @@ export function classifyMetaError(status: number, body: MetaErrorBody): MetaApiE
   } else if (code === 17 || code === 4 || code === 32 || code === 613) {
     kind = "RATE_LIMIT";
     human = "Meta API rate limit reached. The system will retry on the next cycle.";
+  } else if (/custom audience terms|terms of service.*custom audience|custom audience.*terms of service|tos.*custom audience/.test(msg)) {
+    kind = "TOS_REQUIRED";
+    human =
+      "This ad account hasn't accepted Meta's Custom Audience Terms of Service yet. Have the account owner accept them at business.facebook.com/ads/manage/customaudiences/tos, then retry — no campaign changes were made.";
   } else if (code === 200 || code === 10 || e.type === "OAuthException") {
     kind = "PERMISSION";
     human = `Meta permission error: ${e.message ?? "missing ads_management permission on this token."}`;
@@ -100,7 +104,15 @@ async function metaFetch<T>(
     init.body = form;
   }
 
-  const res = await fetch(url, init);
+  let res: Response;
+  try {
+    res = await fetch(url, { ...init, signal: AbortSignal.timeout(10_000) });
+  } catch (err) {
+    if (err instanceof Error && err.name === "TimeoutError") {
+      throw new MetaApiError("UNKNOWN", "Meta API request timed out after 10s. Meta may be degraded — try again shortly.");
+    }
+    throw err;
+  }
   const json = (await res.json().catch(() => ({}))) as T & MetaErrorBody;
   if (!res.ok || (json as MetaErrorBody).error) {
     throw classifyMetaError(res.status, json as MetaErrorBody);
@@ -294,12 +306,54 @@ export interface VerifyCheck {
 }
 
 /**
- * Read-only readiness probe used by the onboarding form: token validity,
- * ad account status, funding source, and page access. Never mutates anything.
+ * Readiness probe used by the onboarding form and preflight: token validity,
+ * ad account status, funding source, Page access, Instagram access, Custom
+ * Audience TOS acceptance, and a validate_only write-permission check.
+ * Nothing is ever persisted to Meta — the campaign-create probe uses
+ * execution_options: ["validate_only"], which runs full permission
+ * enforcement without creating anything, and the TOS probe is a plain GET.
  */
 export async function verifyCredentials(creds: MetaCreds): Promise<{ ready: boolean; checks: VerifyCheck[] }> {
-  const checks: VerifyCheck[] = [];
+  // The account/page/ad-creation-permission/TOS probes are independent Graph
+  // API calls — run them concurrently instead of in series so total latency
+  // stays well under the function timeout. Only the Instagram check is
+  // sequential, since it needs the page's linked IG id from the page probe.
+  const [accountChecks, pageChecks, adPermissionCheck, tosCheck] = await Promise.all([
+    verifyAccount(creds),
+    verifyPage(creds),
+    verifyAdCreationPermission(creds),
+    verifyCustomAudienceTos(creds),
+  ]);
 
+  const checks = [...accountChecks, ...pageChecks, adPermissionCheck, tosCheck];
+  return { ready: checks.every((c) => c.ok), checks };
+}
+
+// campaign-create validate_only doesn't exercise the Custom Audience gate at
+// all (it's scoped to the customaudiences endpoint, not campaigns), so a
+// client who hasn't accepted the Custom Audience TOS previously looked fully
+// "ready" until launch, when createCustomAudience failed reactively. This is
+// a plain read (`GET .../customaudiencestos`) — undocumented field shape, but
+// every third-party integration observed treats a populated `data` array as
+// "accepted" and empty as "not yet accepted," so that's the contract here too.
+async function verifyCustomAudienceTos(creds: MetaCreds): Promise<VerifyCheck> {
+  try {
+    const json = await metaFetch<{ data?: unknown[] }>(creds, `act_${creds.accountId}/customaudiencestos`);
+    const accepted = (json.data?.length ?? 0) > 0;
+    return {
+      item: "Custom Audience Terms of Service",
+      ok: accepted,
+      detail: accepted
+        ? "Custom Audience Terms of Service accepted for this ad account."
+        : `Custom Audience Terms of Service not yet accepted. Accept them at business.facebook.com/ads/manage/customaudiences/tos/?act=${creds.accountId} before launching any campaign that targets a Custom Audience.`,
+    };
+  } catch (err) {
+    const m = err instanceof MetaApiError ? err.humanMessage : (err as Error).message;
+    return { item: "Custom Audience Terms of Service", ok: false, detail: `Could not check Custom Audience TOS status: ${m}` };
+  }
+}
+
+async function verifyAccount(creds: MetaCreds): Promise<VerifyCheck[]> {
   try {
     const acct = await metaFetch<{
       name?: string;
@@ -310,42 +364,89 @@ export async function verifyCredentials(creds: MetaCreds): Promise<{ ready: bool
     }>(creds, `act_${creds.accountId}`, {
       params: { fields: "name,account_status,currency,funding_source,funding_source_details" },
     });
-    checks.push({ item: "Access token", ok: true, detail: "Token accepted by Graph API." });
     const statusMap: Record<number, string> = { 1: "ACTIVE", 2: "DISABLED", 3: "UNSETTLED", 7: "PENDING_RISK_REVIEW", 9: "IN_GRACE_PERIOD", 101: "CLOSED" };
     const statusName = statusMap[acct.account_status ?? 0] ?? `code ${acct.account_status}`;
-    checks.push({
-      item: "Ad account status",
-      ok: acct.account_status === 1,
-      detail: `${acct.name ?? "account"} (${acct.currency ?? "?"}) — ${statusName}`,
-    });
     // A funding source is signalled by either the id, a display string, or the
     // legacy numeric funding_source. A card in the Business but not assigned to
     // THIS ad account will leave all of these empty.
     const fundingLabel = acct.funding_source_details?.display_string;
     const hasFunding = Boolean(fundingLabel || acct.funding_source_details?.id || acct.funding_source);
-    checks.push({
-      item: "Funding source",
-      ok: hasFunding,
-      detail: hasFunding
-        ? `${fundingLabel ?? "Payment method assigned"} (funding id ${acct.funding_source ?? acct.funding_source_details?.id}).`
-        : "No payment method is assigned to THIS ad account. A card added to the Business must still be set as this ad account's funding source: Meta Ads Manager → Billing & payment settings → select this ad account → Add/assign payment method. (Meta will also reject launch until this is done.)",
-    });
+    return [
+      { item: "Access token", ok: true, detail: "Token accepted by Graph API." },
+      {
+        item: "Ad account status",
+        ok: acct.account_status === 1,
+        detail: `${acct.name ?? "account"} (${acct.currency ?? "?"}) — ${statusName}`,
+      },
+      {
+        item: "Funding source",
+        ok: hasFunding,
+        detail: hasFunding
+          ? `${fundingLabel ?? "Payment method assigned"} (funding id ${acct.funding_source ?? acct.funding_source_details?.id}).`
+          : "No payment method is assigned to THIS ad account. A card added to the Business must still be set as this ad account's funding source: Meta Ads Manager → Billing & payment settings → select this ad account → Add/assign payment method. (Meta will also reject launch until this is done.)",
+      },
+    ];
   } catch (err) {
     const m = err instanceof MetaApiError ? err.humanMessage : (err as Error).message;
-    checks.push({ item: "Access token / ad account", ok: false, detail: m });
+    return [{ item: "Access token / ad account", ok: false, detail: m }];
   }
+}
 
-  if (creds.pageId) {
-    try {
-      const page = await metaFetch<{ name?: string }>(creds, creds.pageId, { params: { fields: "name" } });
-      checks.push({ item: "Facebook Page access", ok: true, detail: `Page "${page.name}" reachable with this token.` });
-    } catch (err) {
-      const m = err instanceof MetaApiError ? err.humanMessage : (err as Error).message;
-      checks.push({ item: "Facebook Page access", ok: false, detail: m });
+async function verifyPage(creds: MetaCreds): Promise<VerifyCheck[]> {
+  if (!creds.pageId) {
+    return [{ item: "Facebook Page access", ok: false, detail: "No Page ID provided." }];
+  }
+  try {
+    const page = await metaFetch<{ name?: string; instagram_business_account?: { id: string } }>(creds, creds.pageId, {
+      params: { fields: "name,instagram_business_account" },
+    });
+    const checks: VerifyCheck[] = [
+      { item: "Facebook Page access", ok: true, detail: `Page "${page.name}" reachable with this token.` },
+    ];
+
+    // A Page can have Instagram placements without the token having access to
+    // that IG account specifically — Page access alone does not imply this,
+    // and was the exact gap that let a client's launch fail after "VERIFIED".
+    const igId = page.instagram_business_account?.id;
+    if (igId) {
+      try {
+        const ig = await metaFetch<{ username?: string }>(creds, igId, { params: { fields: "username" } });
+        checks.push({ item: "Instagram account access", ok: true, detail: `Instagram @${ig.username ?? "account"} reachable — ads can publish to Instagram placements.` });
+      } catch (err) {
+        const m = err instanceof MetaApiError ? err.humanMessage : (err as Error).message;
+        checks.push({
+          item: "Instagram account access",
+          ok: false,
+          detail: `This Page has a linked Instagram account, but the token can't access it: ${m}. In Meta Business Settings, grant the system user access under Accounts → Instagram accounts (Page access alone does not cover it).`,
+        });
+      }
     }
-  } else {
-    checks.push({ item: "Facebook Page access", ok: false, detail: "No Page ID provided." });
+    return checks;
+  } catch (err) {
+    const m = err instanceof MetaApiError ? err.humanMessage : (err as Error).message;
+    return [{ item: "Facebook Page access", ok: false, detail: m }];
   }
+}
 
-  return { ready: checks.every((c) => c.ok), checks };
+// Live write-permission probe. The account/page checks above are all
+// read-only GETs and succeed even when the token lacks ads_management —
+// validate_only runs the ad account through the same permission enforcement a
+// real launch does, without creating anything, so a missing/partial grant
+// surfaces here instead of only at "Approve & Launch".
+async function verifyAdCreationPermission(creds: MetaCreds): Promise<VerifyCheck> {
+  try {
+    await metaFetch<{ id?: string; success?: boolean }>(creds, `act_${creds.accountId}/campaigns`, {
+      body: {
+        name: "Copilot readiness check (validate only — nothing is created)",
+        objective: "OUTCOME_TRAFFIC",
+        status: "PAUSED",
+        special_ad_categories: [],
+        execution_options: ["validate_only"],
+      },
+    });
+    return { item: "Ad creation permission", ok: true, detail: "Token can create campaigns on this ad account (validated only — nothing was created)." };
+  } catch (err) {
+    const m = err instanceof MetaApiError ? err.humanMessage : (err as Error).message;
+    return { item: "Ad creation permission", ok: false, detail: `Token cannot create ads on this account: ${m}` };
+  }
 }

@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, log } from "@/lib/db";
 import { credsFromClient, verifyCredentials } from "@/lib/meta";
+import { notifyAdminOfVerifyFailure } from "@/lib/email";
 import { requireSession, canAccessClient } from "@/lib/auth";
 
-/** Read-only Meta credential readiness check for the onboarding form. */
+export const maxDuration = 60;
+
+/** Live Meta credential readiness check for the onboarding form and Platforms panel. */
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireSession();
   if (auth.response) return auth.response;
@@ -22,5 +25,14 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   await log("UI", `Credential check for ${client.name}: ${result.ready ? "READY" : "NOT READY"}`, {
     detail: result,
   });
+
+  if (!result.ready) {
+    // Surface the failure to the admin now, at check time, instead of the
+    // client only discovering it later at launch.
+    await notifyAdminOfVerifyFailure(client, result.checks).catch((err) =>
+      log("UI", `Admin notify failed for ${client.name}: ${(err as Error).message}`, { level: "WARN" }),
+    );
+  }
+
   return NextResponse.json(result);
 }

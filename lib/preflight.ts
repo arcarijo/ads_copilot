@@ -72,8 +72,23 @@ export async function preflightCampaign(
     jumpStep?: JumpStep,
   ) => checks.push({ item, ok, severity, category, detail, jumpStep });
 
-  const campaign = await prisma.campaign.findUnique({ where: { id: campaignId }, include: { client: true } });
-  if (!campaign) {
+  const loadCampaign = () => prisma.campaign.findUnique({ where: { id: campaignId }, include: { client: true } });
+  let found: Awaited<ReturnType<typeof loadCampaign>>;
+  try {
+    found = await loadCampaign();
+  } catch (e) {
+    // The client-include triggers decrypt-on-read for the stored Meta token
+    // (lib/db.ts); a missing/rotated CREDS_SECRET throws here specifically,
+    // distinct from a general DB connectivity failure.
+    const message = e instanceof Error ? e.message : String(e);
+    const isDecryptFailure = /CREDS_SECRET|auth tag|unable to authenticate/i.test(message);
+    throw new Error(
+      isDecryptFailure
+        ? `Could not decrypt this client's stored Meta credentials (${message}). CREDS_SECRET may be missing or has changed in production — re-verify the client's Meta connection.`
+        : `Could not load campaign from the database: ${message}`,
+    );
+  }
+  if (!found) {
     return {
       ready: false,
       hasWarnings: false,
@@ -81,6 +96,7 @@ export async function preflightCampaign(
       checks: [{ item: "Campaign", ok: false, severity: "error", category: "technical", detail: "Campaign not found." }],
     };
   }
+  const campaign = found;
 
   const q: Questionnaire = (() => {
     try {
@@ -194,13 +210,15 @@ export async function preflightCampaign(
     add("Facebook Page", Boolean(pageId), "error", "technical", pageId ? `Publishing from Page ${pageId}.` : "No Page ID available for this campaign.");
   }
 
-  // Live Meta credential probe (read-only, technical).
+  // Live Meta credential probe (validate_only — nothing is created; technical).
   try {
     const creds = campaign.client ? credsFromClient(campaign.client) : envCreds();
     const v = await verifyCredentials(creds);
+    const advisoryItems = new Set(["Funding source", "Custom Audience Terms of Service"]);
     for (const c of v.checks) {
-      // Funding is a warning (Meta is the final authority); token/account/page block.
-      add(`Meta: ${c.item}`, c.ok, c.item === "Funding source" ? "warning" : "error", "technical", c.detail);
+      // Funding and TOS are warnings (Meta is the final authority, and not
+      // every campaign targets a Custom Audience); token/account/page block.
+      add(`Meta: ${c.item}`, c.ok, advisoryItems.has(c.item) ? "warning" : "error", "technical", c.detail);
     }
   } catch (e) {
     add("Meta credentials", false, "error", "technical", (e as Error).message);
