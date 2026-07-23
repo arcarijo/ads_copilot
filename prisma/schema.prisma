@@ -36,6 +36,9 @@ model Client {
   metaAppToken       String?
   status             String  @default("PENDING") // PENDING | VERIFIED | ERROR
   verifyResultJson   String?
+  // Rate-limits admin notification emails triggered by a failed credential
+  // check (auto on verify, or manual "email admin" from the client screen).
+  lastAdminNotifyAt  DateTime?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -221,7 +224,7 @@ model Alert {
   id           String    @id @default(cuid())
   campaignId   String?
   campaign     Campaign? @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  // BILLING_ERROR | ACCOUNT_RESTRICTED | BUDGET_RECOMMENDATION | TOKEN_INVALID | GENERAL
+  // BILLING_ERROR | ACCOUNT_RESTRICTED | BUDGET_RECOMMENDATION | TOKEN_INVALID | META_VERIFY_FAILED | GENERAL
   type         String
   message      String
   acknowledged Boolean   @default(false)

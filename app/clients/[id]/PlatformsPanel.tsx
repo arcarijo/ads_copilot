@@ -51,17 +51,28 @@ export function PlatformsPanel({
   const [checking, setChecking] = useState(false);
   const [checks, setChecks] = useState<VerifyCheck[] | null>(verify?.checks ?? null);
   const [ready, setReady] = useState<boolean | null>(verify?.ready ?? null);
+  const [notifying, setNotifying] = useState(false);
+  const [notifyStatus, setNotifyStatus] = useState<string | null>(null);
 
   const rowFor = (key: string) => platforms.find((p) => p.platform === key);
 
   async function runReadiness() {
     setChecking(true);
+    setNotifyStatus(null);
     const res = await fetch(`/api/clients/${clientId}/verify`, { method: "POST" });
     const json = await res.json();
     setChecking(false);
     setChecks(json.checks ?? []);
     setReady(json.ready ?? false);
     router.refresh();
+  }
+
+  async function notifyAdmin() {
+    setNotifying(true);
+    const res = await fetch(`/api/clients/${clientId}/notify`, { method: "POST" });
+    const json = await res.json();
+    setNotifying(false);
+    setNotifyStatus(json.sent ? "Sent — the admin has been emailed with these details." : json.reason ?? json.error ?? "Could not send.");
   }
 
   async function toggle(spec: PlatformSpec, enabled: boolean) {
@@ -221,7 +232,7 @@ export function PlatformsPanel({
                       <div>
                         <h4 className="text-xs font-semibold" style={{ color: "var(--ink-primary)" }}>Credential readiness</h4>
                         <p className="mt-0.5 text-[11px]" style={{ color: "var(--ink-muted)" }}>
-                          Status <span style={{ color: statusTone }}>{clientStatus}</span> — checks your token, ad account, funding, and Page access on Meta.
+                          Status <span style={{ color: statusTone }}>{clientStatus}</span> — checks your token, ad account, funding, Page, Instagram, and ad-creation permission on Meta.
                         </p>
                       </div>
                       <button
@@ -245,6 +256,19 @@ export function PlatformsPanel({
                           <Icon name={ready ? "check" : "x"} size="0.95rem" strokeWidth={2.25} />
                           {ready ? "Ready to launch ads." : "Not ready — fix failed items and re-run."}
                         </p>
+                        {ready === false && (
+                          <div className="flex items-center gap-3 pt-1">
+                            <button
+                              onClick={notifyAdmin}
+                              disabled={notifying}
+                              className="rounded-[var(--radius-sm)] px-3 py-1.5 text-xs font-medium transition-colors hover:brightness-110 disabled:opacity-50"
+                              style={{ border: "1px solid var(--line-standard)", color: "var(--ink-secondary)" }}
+                            >
+                              {notifying ? "Sending…" : "Email admin about this"}
+                            </button>
+                            {notifyStatus && <span className="text-[11px]" style={{ color: "var(--ink-muted)" }}>{notifyStatus}</span>}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

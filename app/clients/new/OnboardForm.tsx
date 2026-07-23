@@ -17,6 +17,7 @@ export default function OnboardForm({ admin }: { admin: boolean }) {
   const [checks, setChecks] = useState<VerifyCheck[] | null>(null);
   const [ready, setReady] = useState<boolean | null>(null);
   const [researchStatus, setResearchStatus] = useState<string | null>(null);
+  const [notifyStatus, setNotifyStatus] = useState<string | null>(null);
 
   // Admins onboard "clients" (businesses they manage); a signed-in client is
   // setting up their own "ad account".
@@ -58,11 +59,21 @@ export default function OnboardForm({ admin }: { admin: boolean }) {
     if (!clientId) return;
     setBusy(true);
     setError(null);
+    setNotifyStatus(null);
     const res = await fetch(`/api/clients/${clientId}/verify`, { method: "POST" });
     const json = await res.json();
     setBusy(false);
     setChecks(json.checks ?? []);
     setReady(json.ready ?? false);
+  }
+
+  async function notifyAdmin() {
+    if (!clientId) return;
+    setBusy(true);
+    const res = await fetch(`/api/clients/${clientId}/notify`, { method: "POST" });
+    const json = await res.json();
+    setBusy(false);
+    setNotifyStatus(json.sent ? "✅ Sent — the admin has been emailed with these details." : json.reason ?? json.error ?? "Could not send.");
   }
 
   async function buildProfile() {
@@ -138,7 +149,7 @@ export default function OnboardForm({ admin }: { admin: boolean }) {
 
       {clientId && (
         <div className="space-y-5 rounded-xl border border-[var(--line-subtle)] bg-[var(--surface-1)] p-6">
-          <h2 className="font-medium text-[var(--ink-primary)]">3. Verify credentials (read-only check)</h2>
+          <h2 className="font-medium text-[var(--ink-primary)]">3. Verify credentials (nothing is created on Meta)</h2>
           <button onClick={verify} disabled={busy} className="rounded-lg bg-[var(--info)] px-5 py-2 text-sm font-semibold text-black hover:opacity-90 disabled:opacity-50">
             {busy && !researchStatus ? "Checking with Meta…" : "Run readiness check"}
           </button>
@@ -153,6 +164,15 @@ export default function OnboardForm({ admin }: { admin: boolean }) {
               <p className={`text-sm font-semibold ${ready ? "text-[var(--success)]" : "text-[var(--danger)]"}`}>
                 {ready ? `✅ Ready to launch ads for this ${entity}.` : "❌ Not ready — fix the failed items above and re-run."}
               </p>
+              {ready === false && (
+                <div className="flex items-center gap-3">
+                  <button onClick={notifyAdmin} disabled={busy}
+                    className="rounded-lg border border-[var(--line-standard)] bg-[var(--surface-2)] px-4 py-1.5 text-sm font-medium text-[var(--ink-primary)] hover:bg-[var(--surface-3)] disabled:opacity-50">
+                    Email admin about this
+                  </button>
+                  {notifyStatus && <span className="text-xs text-[var(--ink-secondary)]">{notifyStatus}</span>}
+                </div>
+              )}
             </div>
           )}
 

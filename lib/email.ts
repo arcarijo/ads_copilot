@@ -1,4 +1,6 @@
 import { log, prisma } from "./db";
+import type { Client } from "@prisma/client";
+import type { VerifyCheck } from "./meta";
 
 export interface EmailInput {
   to: string;
@@ -72,4 +74,40 @@ export async function sendEmail(input: EmailInput): Promise<{ delivered: boolean
   }
 
   return { delivered, via };
+}
+
+const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL ?? "owner@example.com";
+// Shared across auto (on verify failure) and manual ("Email admin") triggers
+// so a client repeatedly re-running the check, or repeatedly clicking the
+// button, can't spam the admin inbox / burn Resend quota.
+const ADMIN_NOTIFY_COOLDOWN_MS = 15 * 60 * 1000;
+
+/**
+ * Emails the admin about a client's failing Meta credential checks, rate-limited
+ * per client via Client.lastAdminNotifyAt. Returns whether it actually sent.
+ */
+export async function notifyAdminOfVerifyFailure(
+  client: Pick<Client, "id" | "name" | "lastAdminNotifyAt">,
+  checks: VerifyCheck[],
+  opts: { manual?: boolean } = {},
+): Promise<{ sent: boolean; reason?: string }> {
+  const failing = checks.filter((c) => !c.ok);
+  if (failing.length === 0) return { sent: false, reason: "No failing checks." };
+
+  if (client.lastAdminNotifyAt) {
+    const elapsed = Date.now() - client.lastAdminNotifyAt.getTime();
+    if (elapsed < ADMIN_NOTIFY_COOLDOWN_MS) {
+      return { sent: false, reason: `Already notified ${Math.ceil(elapsed / 60000)} min ago — please wait before re-sending.` };
+    }
+  }
+
+  const lines = failing.map((c) => `- ${c.item}: ${c.detail}`).join("\n");
+  await sendEmail({
+    to: NOTIFY_EMAIL,
+    subject: `Meta credential check failing for ${client.name}`,
+    text: `${opts.manual ? "A client manually requested help with" : "Automatic readiness check found"} problem(s) for "${client.name}":\n\n${lines}\n\nOpen the client's Platforms page to review.`,
+    alertType: "META_VERIFY_FAILED",
+  });
+  await prisma.client.update({ where: { id: client.id }, data: { lastAdminNotifyAt: new Date() } });
+  return { sent: true };
 }
