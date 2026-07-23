@@ -81,12 +81,25 @@ npm run redteam:full     -- --target=<preview>  # T2 aggressive
 npx tsx scripts/pipeline/classify-risk.ts --base=origin/main   # what tier is my change?
 ```
 
-## Phase 2 (pending) — database migrations
+## Phase 2 (active) — database migrations
 
-Not yet active. When adopted:
 - Schema change → `prisma migrate dev --name <x>` locally → commit the SQL.
-- Vercel build command becomes `prisma migrate deploy && next build` (preview migrates staging, prod migrates prod).
-- Baseline (one-time): generate `prisma/migrations/0_init`, then `prisma migrate resolve --applied 0_init` on staging and prod.
+- Vercel's build command (`npm run build`) runs `prisma migrate deploy && next build`, so every deploy — preview and production — applies any pending migration for that environment's DB automatically. No more manual `db push` after merge.
+- One-off CLI access to an environment's DB (`migrate status`, `migrate resolve`, etc.) goes through `scripts/with-env.ts`, which loads a gitignored `.env.<env>.secrets` file and runs the command with that DB URL:
+  - `npm run prisma:prod -- <subcommand>` — prod (`.env.production.secrets`)
+  - `npm run prisma:preview -- <subcommand>` — preview/staging (`.env.preview.secrets`)
+  Copy the matching `.example` file, paste the real pooler URL (session-mode, `:5432`) from the Vercel/Supabase dashboard.
 - Use expand-contract (add nullable/new first, backfill, drop/rename later) for zero-downtime.
+
+### Bootstrap gotcha: don't assume every environment is in the same state
+
+When a migration's underlying schema change was **already applied by hand** to some environment before `migrate deploy` existed (e.g. an old `prisma db push`), that environment is *ahead* of migration history while others are *behind*. `prisma migrate deploy` will only succeed cleanly if each environment's `_prisma_migrations` table matches what's actually in its DB — and that has to be checked **per environment**, not assumed uniform:
+
+- **2026-07-22, PR #29 (`chore/prisma-migrate-deploy`)**: `Client.lastAdminNotifyAt` had been pushed to staging by hand but never to production, so the baseline migration (introspected from staging's schema) included the column — correct for staging, wrong for prod.
+- **2026-07-23, this fix**: a follow-up migration (`20260723143321_add_client_last_admin_notify_at`) was added specifically so production's `migrate deploy` would run the real `ALTER TABLE ADD COLUMN` it still needed. But Preview already had that column from the same earlier ad-hoc push staging did — so Preview's `migrate deploy` tried to add an already-existing column and **failed outright**, leaving Preview's migration history stuck in a `failed` state. Every subsequent build on Preview (and any PR branch whose preview environment shares that DB) kept failing at the `prisma migrate deploy` step, which is what made the app's generic `"Preflight check failed unexpectedly. Try again."` message (`app/api/campaigns/[id]/preflight/route.ts`) a *persistent* symptom in that environment rather than a one-off — the build never promoted, so the fix never shipped no matter how many times it was pushed.
+
+**Root cause, one line:** a migration can be simultaneously correct for one environment and broken for another when environments have inconsistent pre-migration history. Always run `npm run prisma:<env> -- migrate status` against **every** environment before merging a schema-changing PR, and resolve (`migrate resolve --applied`/`--rolled-back`) any environment whose actual DB state doesn't match what the new migration expects — don't assume a fix verified against one environment's DB holds for the others.
+
+**Do not reach for `prisma db push` against a real environment as a shortcut** (see `push-prod-schema.bat` in repo root — a leftover from before this phase landed). Any ad-hoc push against prod/staging re-creates this exact drift for the next migration.
 
 See `docs/superpowers/specs/2026-07-20-deployment-pipeline-design.md` and the Phase 1 plan for details.

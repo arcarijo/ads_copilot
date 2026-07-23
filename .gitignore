@@ -11,6 +11,7 @@ next-env.d.ts
 !.env.example
 !.env.redteam.example
 !.env.production.secrets.example
+!.env.preview.secrets.example
 
 # Red-team cycle output (reports + scanner artifacts — never commit)
 scripts/redteam/report/report-*.md
