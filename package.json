@@ -28,7 +28,7 @@
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "prisma": "^6.10.0",
+    "prisma": "^7.9.0",
     "tailwindcss": "^4.1.8",
     "tsx": "^4.19.2",
     "typescript": "^5.8.3",
