@@ -28,7 +28,7 @@ export default async function ClientDetail({ params }: { params: Promise<{ id: s
   if (!client) notFound();
 
   const verify = client.verifyResultJson
-    ? (JSON.parse(client.verifyResultJson) as { ready: boolean; checks: VerifyCheck[] })
+    ? (JSON.parse(client.verifyResultJson) as { ready: boolean; checks: VerifyCheck[]; checkedAt?: string })
     : null;
   const markets = client.profile ? (JSON.parse(client.profile.marketsJson) as string[]) : [];
   const socialLinks = (() => {

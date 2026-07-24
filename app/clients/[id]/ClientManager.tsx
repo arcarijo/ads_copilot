@@ -43,7 +43,7 @@ export interface ClientManagerProps {
   metaAdAccountId: string;
   metaPageId: string;
   status: string;
-  verify: { ready: boolean; checks: VerifyCheck[] } | null;
+  verify: { ready: boolean; checks: VerifyCheck[]; checkedAt?: string } | null;
   profileMd: string | null;
   profileVersion: number | null;
   markets: string[];

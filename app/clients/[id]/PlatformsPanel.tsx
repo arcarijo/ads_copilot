@@ -15,6 +15,16 @@ const PLATFORM_ICON: Record<string, IconName> = {
   LINKEDIN: "briefcase",
 };
 
+function formatCheckedAt(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
 const inputCls =
   "w-full rounded-[var(--radius-sm)] px-3 py-2 text-sm outline-none transition-colors focus:ring-1";
 const inputStyle = { background: "var(--surface-inset)", border: "1px solid var(--line-standard)", color: "var(--ink-primary)" };
@@ -38,7 +48,7 @@ export function PlatformsPanel({
   isAdmin: boolean;
   platforms: PlatformRow[];
   clientStatus: string;
-  verify: { ready: boolean; checks: VerifyCheck[] } | null;
+  verify: { ready: boolean; checks: VerifyCheck[]; checkedAt?: string } | null;
 }) {
   const router = useRouter();
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -52,6 +62,7 @@ export function PlatformsPanel({
   const [checking, setChecking] = useState(false);
   const [checks, setChecks] = useState<VerifyCheck[] | null>(verify?.checks ?? null);
   const [ready, setReady] = useState<boolean | null>(verify?.ready ?? null);
+  const [checkedAt, setCheckedAt] = useState<string | null>(verify?.checkedAt ?? null);
   const [notifying, setNotifying] = useState(false);
   const [notifyStatus, setNotifyStatus] = useState<string | null>(null);
 
@@ -65,6 +76,7 @@ export function PlatformsPanel({
     setChecking(false);
     setChecks(json.checks ?? []);
     setReady(json.ready ?? false);
+    setCheckedAt(json.checkedAt ?? new Date().toISOString());
     router.refresh();
   }
 
@@ -87,6 +99,7 @@ export function PlatformsPanel({
         if (cancelled) return;
         setChecks(json.checks ?? []);
         setReady(json.ready ?? false);
+        setCheckedAt(json.checkedAt ?? new Date().toISOString());
       })
       .catch(() => {});
     return () => {
@@ -263,14 +276,21 @@ export function PlatformsPanel({
                           Status <span style={{ color: statusTone }}>{clientStatus}</span> — checks your token, ad account, funding, Page, Instagram, and ad-creation permission on Meta.
                         </p>
                       </div>
-                      <button
-                        onClick={runReadiness}
-                        disabled={checking}
-                        className="rounded-[var(--radius-sm)] px-3 py-1.5 text-xs font-semibold text-[#1a0f08] transition-transform active:scale-[0.97] disabled:opacity-50"
-                        style={{ background: "var(--accent)" }}
-                      >
-                        {checking ? "Checking with Meta…" : checks ? "Re-run check" : "Run readiness check"}
-                      </button>
+                      <div className="flex items-center gap-2">
+                        {checkedAt && !checking && (
+                          <span className="text-[11px]" style={{ color: "var(--ink-muted)" }}>
+                            Last checked {formatCheckedAt(checkedAt)}
+                          </span>
+                        )}
+                        <button
+                          onClick={runReadiness}
+                          disabled={checking}
+                          className="rounded-[var(--radius-sm)] px-3 py-1.5 text-xs font-semibold text-[#1a0f08] transition-transform active:scale-[0.97] disabled:opacity-50"
+                          style={{ background: "var(--accent)" }}
+                        >
+                          {checking ? "Checking with Meta…" : checks ? "Re-run check" : "Run readiness check"}
+                        </button>
+                      </div>
                     </div>
                     {checks && (
                       <div className="space-y-1.5 text-xs">
