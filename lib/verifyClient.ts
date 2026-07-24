@@ -6,6 +6,7 @@ import type { Client } from "@prisma/client";
 export interface VerifyResult {
   ready: boolean;
   checks: VerifyCheck[];
+  checkedAt: string;
 }
 
 /**
@@ -17,7 +18,11 @@ export async function runReadinessCheck(
   client: Pick<Client, "id" | "name" | "metaAccessToken" | "metaAdAccountId" | "metaPageId" | "lastAdminNotifyAt">,
   source: "UI" | "CRON",
 ): Promise<VerifyResult> {
-  const result = await verifyCredentials(credsFromClient(client));
+  const raw = await verifyCredentials(credsFromClient(client));
+  // checkedAt lets the UI confirm a re-run actually happened even when the
+  // result is unchanged — otherwise a click that reproduces the same failure
+  // looks indistinguishable from a broken button.
+  const result: VerifyResult = { ...raw, checkedAt: new Date().toISOString() };
   await prisma.client.update({
     where: { id: client.id },
     data: { status: result.ready ? "VERIFIED" : "ERROR", verifyResultJson: JSON.stringify(result) },

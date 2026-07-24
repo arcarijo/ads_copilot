@@ -31,9 +31,10 @@ describe("runReadinessCheck", () => {
     (verifyCredentials as ReturnType<typeof vi.fn>).mockResolvedValue({ ready: true, checks: [] });
     const result = await runReadinessCheck(client, "CRON");
     expect(result.ready).toBe(true);
+    expect(result.checkedAt).toEqual(expect.any(String));
     expect(prisma.client.update).toHaveBeenCalledWith({
       where: { id: "c1" },
-      data: { status: "VERIFIED", verifyResultJson: JSON.stringify({ ready: true, checks: [] }) },
+      data: { status: "VERIFIED", verifyResultJson: JSON.stringify({ ready: true, checks: [], checkedAt: result.checkedAt }) },
     });
     expect(notifyAdminOfVerifyFailure).not.toHaveBeenCalled();
   });
@@ -42,10 +43,10 @@ describe("runReadinessCheck", () => {
     const checks = [{ item: "Access token", ok: false, detail: "Invalid token." }];
     (verifyCredentials as ReturnType<typeof vi.fn>).mockResolvedValue({ ready: false, checks });
     (notifyAdminOfVerifyFailure as ReturnType<typeof vi.fn>).mockResolvedValue({ sent: true });
-    await runReadinessCheck(client, "UI");
+    const result = await runReadinessCheck(client, "UI");
     expect(prisma.client.update).toHaveBeenCalledWith({
       where: { id: "c1" },
-      data: { status: "ERROR", verifyResultJson: JSON.stringify({ ready: false, checks }) },
+      data: { status: "ERROR", verifyResultJson: JSON.stringify({ ready: false, checks, checkedAt: result.checkedAt }) },
     });
     expect(notifyAdminOfVerifyFailure).toHaveBeenCalledWith(client, checks);
   });

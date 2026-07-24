@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
+import { ClearLogsButton } from "@/app/components/ClearLogsButton";
 
 export const dynamic = "force-dynamic";
 
@@ -70,6 +71,12 @@ export default async function LogsPage({
           ))}
         </div>
       </div>
+
+      {logs.length > 0 && (
+        <div className="flex justify-end">
+          <ClearLogsButton level={activeLevel} />
+        </div>
+      )}
 
       {logs.length === 0 ? (
         <div className="rounded-[var(--radius-lg)] p-10 text-center" style={{ border: "1px dashed var(--line-standard)", color: "var(--ink-tertiary)" }}>
