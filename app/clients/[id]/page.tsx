@@ -6,6 +6,7 @@ import { Sections, sectionsFromLegacyMd } from "@/lib/profile";
 import { getSession, canAccessClient } from "@/lib/auth";
 import { ClientManager } from "./ClientManager";
 import { AudienceStudio } from "./AudienceStudio";
+import { MetaCampaignsPanel } from "./MetaCampaignsPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -107,6 +108,9 @@ export default async function ClientDetail({ params }: { params: Promise<{ id: s
 
       <section>
         <h2 className="mb-3 text-lg font-medium text-[var(--ink-primary)]">Campaigns</h2>
+        <div className="mb-4">
+          <MetaCampaignsPanel clientId={client.id} />
+        </div>
         {client.campaigns.length === 0 ? (
           <p className="text-sm text-[var(--ink-muted)]">
             None yet. <Link href="/new" className="text-[var(--accent)] underline">Create one</Link>.

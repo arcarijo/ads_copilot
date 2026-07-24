@@ -1,5 +1,5 @@
 import { prisma } from "./db";
-import { credsFromClient, envCreds, verifyCredentials } from "./meta";
+import { credsFromClient, envCreds, listRemoteCampaigns, verifyCredentials } from "./meta";
 import {
   assertBudgetAllowed,
   GLOBAL_MAX_DAILY_SPEND_CENTS,
@@ -222,6 +222,22 @@ export async function preflightCampaign(
     }
   } catch (e) {
     add("Meta credentials", false, "error", "technical", (e as Error).message);
+  }
+
+  // Name-collision advisory (best-effort, non-blocking — Meta allows duplicate
+  // names, but a match against a live campaign is almost always a mistake).
+  try {
+    const creds = campaign.client ? credsFromClient(campaign.client) : envCreds();
+    const remote = await listRemoteCampaigns(creds);
+    const collision = remote.find(
+      (r) => r.status !== "DELETED" && r.name.trim().toLowerCase() === campaign.name.trim().toLowerCase(),
+    );
+    if (collision) {
+      add("Name collision", false, "warning", "marketing",
+        `A ${collision.status.toLowerCase()} campaign named "${collision.name}" already exists on Meta (ID ${collision.id}) — double-check this isn't a duplicate launch.`, 1);
+    }
+  } catch {
+    // Best-effort only — don't block or clutter preflight if this lookup fails.
   }
 
   // ---------------- AI readiness rating (best-effort) ----------------

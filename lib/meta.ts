@@ -169,6 +169,22 @@ export const pauseEntity = (creds: MetaCreds, id: string) => setEntityStatus(cre
 
 // ---------- Read ----------
 
+/**
+ * What campaigns ALREADY live on the ad account — used to surface Meta's
+ * ground truth (vs. what this app's DB thinks exists) and to warn about
+ * name collisions before launch. Read-only.
+ */
+export async function listRemoteCampaigns(
+  creds: MetaCreds
+): Promise<{ id: string; name: string; status: string; objective?: string; updated_time?: string }[]> {
+  const json = await metaFetch<{
+    data: { id: string; name: string; status: string; objective?: string; updated_time?: string }[];
+  }>(creds, `act_${creds.accountId}/campaigns`, {
+    params: { fields: "id,name,status,objective,updated_time", limit: "100" },
+  });
+  return json.data ?? [];
+}
+
 // ---------- Audiences ----------
 
 /**
