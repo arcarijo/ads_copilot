@@ -396,13 +396,26 @@ async function verifyPage(creds: MetaCreds): Promise<VerifyCheck[]> {
   if (!creds.pageId) {
     return [{ item: "Facebook Page access", ok: false, detail: "No Page ID provided." }];
   }
+  let pageName: string | undefined;
   try {
-    const page = await metaFetch<{ name?: string; instagram_business_account?: { id: string } }>(creds, creds.pageId, {
-      params: { fields: "name,instagram_business_account" },
+    const page = await metaFetch<{ name?: string }>(creds, creds.pageId, { params: { fields: "name" } });
+    pageName = page.name;
+  } catch (err) {
+    const m = err instanceof MetaApiError ? err.humanMessage : (err as Error).message;
+    return [{ item: "Facebook Page access", ok: false, detail: m }];
+  }
+  const checks: VerifyCheck[] = [
+    { item: "Facebook Page access", ok: true, detail: `Page "${pageName}" reachable with this token.` },
+  ];
+
+  try {
+    // Fetched separately from the name above: a token missing IG-specific
+    // permissions gets error #100 ("nonexisting field") on this field alone,
+    // which previously failed the whole request and got mislabeled as a
+    // Page-access problem instead of an Instagram-permission one.
+    const page = await metaFetch<{ instagram_business_account?: { id: string } }>(creds, creds.pageId, {
+      params: { fields: "instagram_business_account" },
     });
-    const checks: VerifyCheck[] = [
-      { item: "Facebook Page access", ok: true, detail: `Page "${page.name}" reachable with this token.` },
-    ];
 
     // A Page can have Instagram placements without the token having access to
     // that IG account specifically — Page access alone does not imply this,
@@ -424,7 +437,12 @@ async function verifyPage(creds: MetaCreds): Promise<VerifyCheck[]> {
     return checks;
   } catch (err) {
     const m = err instanceof MetaApiError ? err.humanMessage : (err as Error).message;
-    return [{ item: "Facebook Page access", ok: false, detail: m }];
+    checks.push({
+      item: "Instagram account access",
+      ok: false,
+      detail: `Could not check this Page's linked Instagram account: ${m}. In Meta Business Settings, grant the system user access under Accounts → Instagram accounts.`,
+    });
+    return checks;
   }
 }
 

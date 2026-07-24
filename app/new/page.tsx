@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import type { CopilotPlan, CreativeInput } from "@/lib/types";
 import { resolveCoverage, corridorsFor, ONTARIO_CITIES, TIER_ORDER, TIER_LABELS, type CoverageTier } from "@/lib/geoOntario";
 import { CAMPAIGN_INTENTS, INTENT_DEFS, intentApproachNudge, type CampaignIntent } from "@/lib/campaignIntent";
+import { getCheckResolution } from "@/lib/preflightResolutions";
 
 interface ClientOption {
   id: string;
@@ -1373,6 +1374,7 @@ function NewCampaignForm() {
                   title="Marketing readiness"
                   checks={preflight.checks.filter((c) => c.category === "marketing")}
                   onJump={jumpTo}
+                  clientId={clientId}
                 />
 
                 {/* Technical */}
@@ -1380,6 +1382,7 @@ function NewCampaignForm() {
                   title="Technical"
                   checks={preflight.checks.filter((c) => c.category === "technical")}
                   onJump={jumpTo}
+                  clientId={clientId}
                 />
 
                 {/* Overall verdict */}
@@ -1437,26 +1440,47 @@ function Disclosure({ summary, defaultOpen = false, children }: { summary: strin
 interface PfCheck { item: string; ok: boolean; severity: "error" | "warning"; detail: string; jumpStep?: 1 | 2 | 3 | 4 }
 
 /** A titled group of pre-flight checks with a jump-to-fix button on failures. */
-function PreflightCategory({ title, checks, onJump }: { title: string; checks: PfCheck[]; onJump: (s: 1 | 2 | 3 | 4) => void }) {
+function PreflightCategory({ title, checks, onJump, clientId }: { title: string; checks: PfCheck[]; onJump: (s: 1 | 2 | 3 | 4) => void; clientId?: string }) {
   if (checks.length === 0) return null;
   return (
     <div>
       <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--ink-tertiary)]">{title}</h4>
       <div className="space-y-1.5 text-sm">
-        {checks.map((c, i) => (
-          <div key={i} className="flex items-start gap-2">
-            <span className="shrink-0">{c.ok ? "✅" : c.severity === "warning" ? "⚠️" : "❌"}</span>
-            <div className="flex-1">
-              <b className={c.severity === "warning" && !c.ok ? "text-[var(--warning)]" : ""}>{c.item}</b>{" "}
-              <span className="text-[var(--ink-secondary)]">— {c.detail}</span>
+        {checks.map((c, i) => {
+          const resolution = !c.ok && !c.jumpStep ? getCheckResolution(c.item) : undefined;
+          const actionHref = resolution?.actionHref?.(clientId) ?? null;
+          return (
+            <div key={i}>
+              <div className="flex items-start gap-2">
+                <span className="shrink-0">{c.ok ? "✅" : c.severity === "warning" ? "⚠️" : "❌"}</span>
+                <div className="flex-1">
+                  <b className={c.severity === "warning" && !c.ok ? "text-[var(--warning)]" : ""}>{c.item}</b>{" "}
+                  <span className="text-[var(--ink-secondary)]">— {c.detail}</span>
+                </div>
+                {!c.ok && c.jumpStep && (
+                  <button onClick={() => onJump(c.jumpStep!)} className="shrink-0 rounded border border-[var(--line-standard)] px-2 py-0.5 text-xs text-[var(--info)] hover:bg-[var(--surface-1)]">
+                    Fix →
+                  </button>
+                )}
+              </div>
+              {resolution && (
+                <div className="ml-6 mt-1">
+                  <Disclosure summary="How to fix this">
+                    <p>{resolution.instructions}</p>
+                    {resolution.actionLabel && actionHref && (
+                      <a
+                        href={actionHref}
+                        className="mt-1.5 inline-block rounded border border-[var(--line-standard)] px-2 py-0.5 text-xs text-[var(--info)] hover:bg-[var(--surface-1)]"
+                      >
+                        {resolution.actionLabel} →
+                      </a>
+                    )}
+                  </Disclosure>
+                </div>
+              )}
             </div>
-            {!c.ok && c.jumpStep && (
-              <button onClick={() => onJump(c.jumpStep!)} className="shrink-0 rounded border border-[var(--line-standard)] px-2 py-0.5 text-xs text-[var(--info)] hover:bg-[var(--surface-1)]">
-                Fix →
-              </button>
-            )}
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
