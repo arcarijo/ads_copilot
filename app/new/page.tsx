@@ -1467,14 +1467,26 @@ function PreflightCategory({ title, checks, onJump, clientId }: { title: string;
                 <div className="ml-6 mt-1">
                   <Disclosure summary="How to fix this">
                     <p>{resolution.instructions}</p>
-                    {resolution.actionLabel && actionHref && (
-                      <a
-                        href={actionHref}
-                        className="mt-1.5 inline-block rounded border border-[var(--line-standard)] px-2 py-0.5 text-xs text-[var(--info)] hover:bg-[var(--surface-1)]"
-                      >
-                        {resolution.actionLabel} →
-                      </a>
-                    )}
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                      {resolution.actionLabel && actionHref && (
+                        <a
+                          href={actionHref}
+                          className="inline-block rounded border border-[var(--line-standard)] px-2 py-0.5 text-xs text-[var(--info)] hover:bg-[var(--surface-1)]"
+                        >
+                          {resolution.actionLabel} →
+                        </a>
+                      )}
+                      {resolution.helpUrl && (
+                        <a
+                          href={resolution.helpUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-block rounded border border-[var(--line-standard)] px-2 py-0.5 text-xs text-[var(--ink-secondary)] hover:bg-[var(--surface-1)]"
+                        >
+                          Meta support doc ↗
+                        </a>
+                      )}
+                    </div>
                   </Disclosure>
                 </div>
               )}

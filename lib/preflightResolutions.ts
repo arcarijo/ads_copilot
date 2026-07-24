@@ -8,6 +8,8 @@ export interface CheckResolution {
   instructions: string;
   actionLabel?: string;
   actionHref?: (clientId?: string) => string | null;
+  /** Real Meta Business Help Center / developer doc link for this failure, shown as a "Learn more" link. */
+  helpUrl?: string;
 }
 
 const RESOLUTIONS: Record<string, CheckResolution> = {
@@ -16,14 +18,17 @@ const RESOLUTIONS: Record<string, CheckResolution> = {
       'The saved Meta access token is invalid or has expired. In Meta Business Settings, go to Users → System Users, select the system user for this account, and click "Generate New Token" with the same permissions as before. Then paste the new token into this client\'s settings.',
     actionLabel: "Update token in Client Settings",
     actionHref: (clientId) => (clientId ? `/clients/${clientId}` : null),
+    helpUrl: "https://developers.facebook.com/docs/business-management-apis/system-users/install-apps-and-generate-tokens/",
   },
   "Meta: Ad account status": {
     instructions:
       "This ad account is disabled or restricted on Meta's side. Open Meta Ads Manager and check the Account Overview for the exact restriction reason — Meta is the final authority here, so this can't be fixed from within this app.",
+    helpUrl: "https://www.facebook.com/business/help/422289316306981",
   },
   "Meta: Funding source": {
     instructions:
       "No valid payment method is on file for this ad account. In Meta Ads Manager, go to Billing & Payments and add or update a payment method.",
+    helpUrl: "https://www.facebook.com/business/help/132073386867900",
   },
   "Meta: Custom Audience Terms of Service": {
     instructions:
@@ -34,18 +39,21 @@ const RESOLUTIONS: Record<string, CheckResolution> = {
       'The saved token can\'t reach the connected Facebook Page — either the Page ID is wrong, or the System User isn\'t assigned to that Page. In Meta Business Settings, go to Accounts → Pages, select the Page, and assign the System User with "Manage Page" access. If the Page ID itself is wrong, correct it in this client\'s settings.',
     actionLabel: "Update Page ID in Client Settings",
     actionHref: (clientId) => (clientId ? `/clients/${clientId}` : null),
+    helpUrl: "https://www.facebook.com/business/help/152071822895768",
   },
   "Meta: Instagram account access": {
     instructions:
       "The connected Facebook Page doesn't have a linked Instagram professional account, or the token wasn't generated with Instagram permission. In Meta Business Settings, go to Accounts → Instagram accounts and connect the client's Instagram account to this Page, then regenerate the System User token so it includes Instagram permissions. Once you have the new token, update it here.",
     actionLabel: "Update token in Client Settings",
     actionHref: (clientId) => (clientId ? `/clients/${clientId}` : null),
+    helpUrl: "https://www.facebook.com/business/help/898752960195806",
   },
   "Meta: Ad creation permission": {
     instructions:
       'The token doesn\'t have permission to create ads on this account. In Meta Business Settings, go to Accounts → Ad Accounts, select this ad account, and assign the System User with "Manage campaigns" access — then regenerate the token so it picks up the new permission and update it here.',
     actionLabel: "Update token in Client Settings",
     actionHref: (clientId) => (clientId ? `/clients/${clientId}` : null),
+    helpUrl: "https://www.facebook.com/business/help/155909647811305",
   },
   "Facebook Page": {
     instructions:
