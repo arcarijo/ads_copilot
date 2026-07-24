@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { VerifyCheck } from "@/lib/meta";
+import { getCheckResolution } from "@/lib/preflightResolutions";
 import { PLATFORMS, PlatformSpec } from "@/lib/platforms";
 import { Icon, IconName } from "./../../components/Icon";
 
@@ -66,6 +67,33 @@ export function PlatformsPanel({
     setReady(json.ready ?? false);
     router.refresh();
   }
+
+  // Silent background re-check whenever someone opens this client's page, so
+  // readiness reflects reality now rather than whatever the last manual click
+  // or the nightly cron sweep last recorded. Doesn't touch the `checking`
+  // spinner or router.refresh() — those are for the explicit button only.
+  // Throttled client-side (sessionStorage) so repeated navigation/refresh
+  // can't be used to hammer the tenant's own Meta API quota.
+  useEffect(() => {
+    const key = `readiness-check:${clientId}`;
+    const last = Number(sessionStorage.getItem(key) ?? 0);
+    if (Date.now() - last < 5 * 60 * 1000) return;
+    sessionStorage.setItem(key, String(Date.now()));
+
+    let cancelled = false;
+    fetch(`/api/clients/${clientId}/verify`, { method: "POST" })
+      .then((res) => res.json())
+      .then((json) => {
+        if (cancelled) return;
+        setChecks(json.checks ?? []);
+        setReady(json.ready ?? false);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientId]);
 
   async function notifyAdmin() {
     setNotifying(true);
@@ -246,12 +274,36 @@ export function PlatformsPanel({
                     </div>
                     {checks && (
                       <div className="space-y-1.5 text-xs">
-                        {checks.map((c) => (
-                          <div key={c.item} className="flex items-start gap-2">
-                            <Icon name={c.ok ? "check" : "x"} size="0.95rem" strokeWidth={2.25} style={{ color: c.ok ? "var(--success)" : "var(--danger)", marginTop: "0.1rem" }} />
-                            <div style={{ color: "var(--ink-secondary)" }}><b style={{ color: "var(--ink-primary)" }}>{c.item}</b> — {c.detail}</div>
-                          </div>
-                        ))}
+                        {checks.map((c) => {
+                          const resolution = !c.ok ? getCheckResolution(`Meta: ${c.item}`) : undefined;
+                          return (
+                            <div key={c.item} className="flex items-start gap-2">
+                              <Icon name={c.ok ? "check" : "x"} size="0.95rem" strokeWidth={2.25} style={{ color: c.ok ? "var(--success)" : "var(--danger)", marginTop: "0.1rem" }} />
+                              <div style={{ color: "var(--ink-secondary)" }}>
+                                <b style={{ color: "var(--ink-primary)" }}>{c.item}</b> — {c.detail}
+                                {resolution && (
+                                  <details className="mt-1">
+                                    <summary className="cursor-pointer text-[11px] font-medium" style={{ color: "var(--accent)" }}>How to fix this</summary>
+                                    <div className="mt-1 space-y-1.5 text-[11px]" style={{ color: "var(--ink-secondary)" }}>
+                                      <p>{resolution.instructions}</p>
+                                      {resolution.helpUrl && (
+                                        <a
+                                          href={resolution.helpUrl}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="inline-block rounded px-2 py-0.5 font-medium hover:brightness-110"
+                                          style={{ border: "1px solid var(--line-standard)", color: "var(--ink-secondary)" }}
+                                        >
+                                          Meta support doc ↗
+                                        </a>
+                                      )}
+                                    </div>
+                                  </details>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
                         <p className="flex items-center gap-1.5 pt-1 font-semibold" style={{ color: ready ? "var(--success)" : "var(--danger)" }}>
                           <Icon name={ready ? "check" : "x"} size="0.95rem" strokeWidth={2.25} />
                           {ready ? "Ready to launch ads." : "Not ready — fix failed items and re-run."}
